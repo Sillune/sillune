@@ -1,0 +1,12 @@
+/target/
+/ui/dist/
+/out/
+/local/
+/.cargo/
+*.pdb
+*.gguf
+*.safetensors
+*.sqlite*
+*.part
+.env
+.env.*

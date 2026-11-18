@@ -1,0 +1,48 @@
+param(
+    [string] $Trunk = 'trunk',
+    [switch] $Offline
+)
+
+$ErrorActionPreference = 'Stop'
+$project = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
+$output = Join-Path $project 'out'
+$config = Get-Content -LiteralPath (Join-Path $project 'desktop\tauri.conf.json') -Raw | ConvertFrom-Json
+$version = $config.version
+$env:RUSTUP_TOOLCHAIN = 'stable-x86_64-pc-windows-msvc'
+$env:CARGO_ENCODED_RUSTFLAGS = @("--remap-path-prefix=$project=sillune", "--remap-path-prefix=$env:USERPROFILE=windows-profile") -join [char]31
+
+Push-Location (Join-Path $project 'ui')
+try {
+    $trunkArgs = @('build', '--release', '--locked')
+    if ($Offline) { $trunkArgs += '--offline' }
+    & $Trunk @trunkArgs
+    if ($LASTEXITCODE -ne 0) { throw "Échec de la compilation de l’interface" }
+} finally {
+    Pop-Location
+}
+
+Push-Location $project
+try {
+    $cargoArgs = @('build', '--release', '--locked', '-p', 'sillune')
+    if ($Offline) { $cargoArgs += '--offline' }
+    cargo @cargoArgs
+    if ($LASTEXITCODE -ne 0) { throw 'Échec de la compilation de Sillune' }
+} finally {
+    Pop-Location
+}
+
+$package = Join-Path $output 'Sillune'
+New-Item -ItemType Directory -Force -Path $package | Out-Null
+Copy-Item -LiteralPath (Join-Path $project 'target\release\sillune.exe') -Destination (Join-Path $package 'Sillune.exe') -Force
+Copy-Item -LiteralPath (Join-Path $project 'LICENSE') -Destination (Join-Path $package 'LICENSE.txt') -Force
+Copy-Item -LiteralPath (Join-Path $project 'README.md') -Destination (Join-Path $package 'LISEZ-MOI.md') -Force
+foreach ($name in 'frontend-design','test-driven-development') {
+    $dest = Join-Path $package "Licences tierces\$name"
+    New-Item -ItemType Directory -Force -Path $dest | Out-Null
+    Copy-Item -LiteralPath (Join-Path $project "skills\$name\LICENSE.txt"),(Join-Path $project "skills\$name\SOURCE.txt") -Destination $dest -Force
+}
+$archive = Join-Path $output "Sillune-$version-windows-x64.zip"
+Compress-Archive -LiteralPath $package -DestinationPath $archive -Force
+$hash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+"$hash  $(Split-Path -Leaf $archive)" | Set-Content -LiteralPath "$archive.sha256" -Encoding ascii
+Write-Output $archive

@@ -1,0 +1,5 @@
+id = "image"
+title = "Image"
+description = "Générer des images avec le moteur local."
+kind = "mode"
+version = "1.0.0"

@@ -1,0 +1,5 @@
+id = "connectors"
+title = "Connecteurs"
+description = "Utiliser GitHub, Google Drive et les serveurs MCP."
+kind = "connector"
+version = "1.0.0"

@@ -1,0 +1,5 @@
+id = "plugin"
+title = "Plugin"
+description = "Créer et installer des extensions."
+kind = "mode"
+version = "1.0.0"

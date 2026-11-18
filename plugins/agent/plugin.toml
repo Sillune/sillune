@@ -1,0 +1,5 @@
+id = "agent"
+title = "Agent"
+description = "Exécuter des tâches dans le dossier de travail."
+kind = "mode"
+version = "1.0.0"

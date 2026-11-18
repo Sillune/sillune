@@ -1,0 +1,5 @@
+id = "prompts"
+title = "Prompt"
+description = "Enregistrer et copier des prompts."
+kind = "panel"
+version = "1.0.0"

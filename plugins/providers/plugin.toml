@@ -1,0 +1,5 @@
+id = "providers"
+title = "Fournisseurs"
+description = "Connecter les API de modèles et changer de modèle."
+kind = "provider"
+version = "1.0.0"

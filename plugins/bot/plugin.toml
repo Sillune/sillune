@@ -1,0 +1,5 @@
+id = "bot"
+title = "Bot"
+description = "Dialoguer avec le personnage vocal Sillune."
+kind = "mode"
+version = "1.0.0"

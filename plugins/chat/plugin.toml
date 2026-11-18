@@ -1,0 +1,5 @@
+id = "chat"
+title = "Chat"
+description = "Lire, rechercher et livrer des pièces jointes."
+kind = "mode"
+version = "1.0.0"

@@ -1,0 +1,5 @@
+id = "memory"
+title = "Mémoire"
+description = "Conserver les préférences et rappeler les anciennes conversations."
+kind = "memory"
+version = "1.0.0"

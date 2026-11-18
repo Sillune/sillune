@@ -1,0 +1,6 @@
+{
+  "identifier": "main",
+  "description": "Fenêtre principale locale de Sillune",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

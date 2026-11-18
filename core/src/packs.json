@@ -1,0 +1,80 @@
+{
+  "image": {
+    "name": "SDXS-512-DreamShaper • Vulkan",
+    "license": "https://huggingface.co/IDKiro/sdxs-512-dreamshaper",
+    "folder": "sd",
+    "binary": "sd-server.exe",
+    "archive": {
+      "file": "sd.zip",
+      "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1106-532d2c1/sd-master-532d2c1-bin-win-vulkan-x64.zip",
+      "sha": "3e66222c87ca27074e1fd8ce79706eef17a8aaf39949906aa1bee7e060f22ecc",
+      "size": 30312081
+    },
+    "files": [
+      {
+        "file": "sdxs.safetensors",
+        "url": "https://huggingface.co/akleine/sdxs-512/resolve/17ef024d73ebee1db9b0643f9c90454dae6c5772/sdxs.safetensors",
+        "sha": "6cca5bfd11b588cdfb4602018c7e623d24c95fdfdc5ab2d4b9e6978b3186980f",
+        "size": 882587118
+      }
+    ]
+  },
+  "quality": {
+    "name": "FLUX.2 klein 4B Q4 • Vulkan",
+    "license": "https://huggingface.co/black-forest-labs/FLUX.2-klein-4B",
+    "folder": "sd",
+    "binary": "sd-server.exe",
+    "archive": {
+      "file": "sd.zip",
+      "url": "https://github.com/leejet/stable-diffusion.cpp/releases/download/master-1106-532d2c1/sd-master-532d2c1-bin-win-vulkan-x64.zip",
+      "sha": "3e66222c87ca27074e1fd8ce79706eef17a8aaf39949906aa1bee7e060f22ecc",
+      "size": 30312081
+    },
+    "files": [
+      {
+        "file": "flux-2-klein-4b-Q4_0.gguf",
+        "url": "https://huggingface.co/leejet/FLUX.2-klein-4B-GGUF/resolve/3b1f5a9dc3abb32238b053aeb3d823c30afdacbd/flux-2-klein-4b-Q4_0.gguf",
+        "sha": "d1023499ef3f2f82ff7c50e6778495195c1b6cc34835741778868428111f9ff4",
+        "size": 2460378560
+      },
+      {
+        "file": "Qwen3-4B-Q4_K_M.gguf",
+        "url": "https://huggingface.co/unsloth/Qwen3-4B-GGUF/resolve/22c9fc8a8c7700b76a1789366280a6a5a1ad1120/Qwen3-4B-Q4_K_M.gguf",
+        "sha": "f6f851777709861056efcdad3af01da38b31223a3ba26e61a4f8bf3a2195813a",
+        "size": 2497281312
+      },
+      {
+        "file": "flux2-vae.safetensors",
+        "url": "https://huggingface.co/Comfy-Org/flux2-klein-4B/resolve/5b3abca5c0dc1ecd4eaf3340868d09063fc1c965/split_files/vae/flux2-vae.safetensors",
+        "sha": "868fe7b343cc8f3a19dbcfcafbc3d5f888802be3f89bd81b65b3621a066ce8f3",
+        "size": 336211292
+      }
+    ]
+  },
+  "voice": {
+    "name": "LFM3-Audio-2B • Français",
+    "license": "https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF/blob/main/LICENSE",
+    "folder": "llama",
+    "binary": "llama-server.exe",
+    "archive": {
+      "file": "llama.zip",
+      "url": "https://github.com/ggml-org/llama.cpp/releases/download/b12489/llama-b12489-bin-win-vulkan-x64.zip",
+      "sha": "ed53eb97dffafc88e0b4c02287d701b9b607c4d06898da9d7b0261063d2b8fd6",
+      "size": 38524399
+    },
+    "files": [
+      {
+        "file": "LFM3-Audio-2B-Q4_K_M.gguf",
+        "url": "https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF/resolve/39670cb5c42e9c4bfe046519ba7ffbe47f9552ad/LFM3-Audio-2B-Q4_K_M.gguf",
+        "sha": "9a773289bd321ed879cd3a76545f6aca506e403851a45fb315420aee45625be2",
+        "size": 1099626016
+      },
+      {
+        "file": "mmproj-LFM3-Audio-2B-Q4_K_M.gguf",
+        "url": "https://huggingface.co/LiquidAI/LFM3-Audio-2B-GGUF/resolve/39670cb5c42e9c4bfe046519ba7ffbe47f9552ad/mmproj-LFM3-Audio-2B-Q4_K_M.gguf",
+        "sha": "1a3a895160aad17c1f52117a6ee4cea8e68988651ea5a33c5b990539e8eae81d",
+        "size": 172418048
+      }
+    ]
+  }
+}
