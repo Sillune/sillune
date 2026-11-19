@@ -2,7 +2,7 @@
 
 [Lire en français](README.fr.md)
 
-Sillune is an AI workspace for Windows. Its core, Leptos interface and plugin SDK are written in Rust. Local packs use Vulkan for image, voice and 3D generation.
+Sillune is an AI workspace for Windows. Its core, Leptos interface and plugin SDK are written in Rust. Local packs use Vulkan for image, voice and 3D generation. Create and tested with Intel Arc b580
 
 ## Get started
 
