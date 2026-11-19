@@ -2,7 +2,7 @@
 
 [English](README.md)
 
-Sillune est un assistant IA Windows. Le noyau, l’interface Leptos et le SDK de plugins sont écrits en Rust. Les packs locaux d’image, de voix et de 3D utilisent Vulkan.
+Sillune est un assistant IA Windows. Le noyau, l’interface Leptos et le SDK de plugins sont écrits en Rust. Les packs locaux d’image, de voix et de 3D utilisent Vulkan. Créer et tester avec une Intel Arc b580
 
 ## Démarrage
 
