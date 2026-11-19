@@ -37,7 +37,10 @@ Copy-Item -LiteralPath (Join-Path $project 'target\release\sillune.exe') -Destin
 Copy-Item -LiteralPath (Join-Path $project 'LICENSE') -Destination (Join-Path $package 'LICENSE.txt') -Force
 Copy-Item -LiteralPath (Join-Path $project 'README.md') -Destination (Join-Path $package 'LISEZ-MOI.md') -Force
 $releaseFiles = @('Sillune.exe', 'LICENSE.txt', 'LISEZ-MOI.md')
-foreach ($name in 'frontend-design','test-driven-development') {
+$skillCatalog = Get-Content -LiteralPath (Join-Path $project 'skills/catalog.json') -Raw | ConvertFrom-Json
+foreach ($entry in $skillCatalog) {
+    $name = $entry.id
+    if ($name -notmatch '^[a-z0-9-]+$') { throw 'Identifiant de skill invalide' }
     $dest = Join-Path $package "Licences tierces\$name"
     New-Item -ItemType Directory -Force -Path $dest | Out-Null
     Copy-Item -LiteralPath (Join-Path $project "skills\$name\LICENSE.txt"),(Join-Path $project "skills\$name\SOURCE.txt") -Destination $dest -Force

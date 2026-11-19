@@ -118,7 +118,16 @@ async fn main() -> Result<()> {
     let bot = session(&app, "bot", "Bot · LFM3 en français").await?;
     let pcm = STANDARD.encode(std::fs::read(&args[2])?);
     let voice = turn(&app, &bot, json!({"pcm":pcm,"speak":true}), false).await?;
-    check_file(&app, &voice, "audio/wav")?;
+    if voice["voice"] != true || !voice["files"].as_array().is_some_and(Vec::is_empty) {
+        bail!("Le Bot doit produire une réponse audio temporaire");
+    }
+    let audio = app.dispatch("voice_audio", json!({"session":bot})).await?;
+    if !audio
+        .as_str()
+        .is_some_and(|v| v.starts_with("data:audio/wav;base64,UklGR"))
+    {
+        bail!("L’audio temporaire du Bot est absent");
+    }
     if !voice["events"].as_array().is_some_and(|rows| {
         rows.iter()
             .any(|r| r.as_str().unwrap_or_default().starts_with("Voix reconnue"))

@@ -7,5 +7,6 @@ pub mod plugins;
 pub mod provider;
 pub mod skills;
 pub mod storage;
+mod themes;
 pub mod tools;
 pub mod vault;

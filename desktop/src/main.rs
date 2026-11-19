@@ -121,7 +121,7 @@ fn main() {
                 Some(root) => PathBuf::from(root),
                 None => app.path().app_local_data_dir()?,
             };
-            let root = App::open(root)?;
+            let root = App::open_with_desktop(root, app.path().desktop_dir().ok())?;
             app.manage(root);
             app.manage(microphone::Microphone::default());
             Ok(())

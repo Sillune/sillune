@@ -16,6 +16,7 @@ pub struct Settings {
     pub search: String,
     pub searx_url: String,
     pub theme: String,
+    pub mode_navigation: String,
     pub permission: String,
     pub memory: bool,
     pub mcp: Vec<McpConfig>,
@@ -43,6 +44,7 @@ impl Default for Settings {
             search: "openrouter".into(),
             searx_url: String::new(),
             theme: "system".into(),
+            mode_navigation: "sidebar".into(),
             permission: "ask".into(),
             memory: false,
             mcp: Vec::new(),
@@ -62,6 +64,7 @@ pub enum Mode {
     ThreeD,
     Bot,
     Plugin,
+    Themes,
 }
 
 impl Mode {
@@ -73,6 +76,7 @@ impl Mode {
             Self::ThreeD => "3d",
             Self::Bot => "bot",
             Self::Plugin => "plugin",
+            Self::Themes => "themes",
         }
     }
 }

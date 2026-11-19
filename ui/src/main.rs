@@ -24,7 +24,7 @@ fn App() -> impl IntoView {
     ui.start_polling();
     clock(move || now.set(browser_now()), 250);
     view! {
-        <div class="app" data-theme=move || ui.setting("theme")>
+        <div class="app" data-theme=move || ui.setting("theme") style=move || theme_style(ui)>
             <Sidebar ui=ui/>
             <main class="main">
                 <Header ui=ui now=now/>
@@ -46,8 +46,30 @@ fn App() -> impl IntoView {
     }
 }
 
+fn theme_style(ui: Ui) -> String {
+    ui.snapshot.with(|snapshot| {
+        let id = snapshot["settings"]["theme"].as_str().unwrap_or_default();
+        let theme = &snapshot["themes"][id];
+        let Some(scheme) = theme["scheme"].as_str() else { return String::new(); };
+        let colors = &theme["colors"];
+        let mut style = format!("color-scheme:{scheme};");
+        for (key, vars) in [
+            ("background", &["canvas"][..]), ("sidebar", &["side"]), ("surface", &["card"]),
+            ("text", &["text"]), ("muted", &["muted","hint"]), ("accent", &["accent","accent-solid"]),
+            ("accent_text", &["accent-ink"]), ("border", &["edge"]), ("danger", &["danger"]), ("success", &["success"]),
+        ] {
+            if let Some(value) = colors[key].as_str() {
+                for name in vars { style.push_str(&format!("--{name}:{value};")); }
+            }
+        }
+        style.push_str("--hover:color-mix(in srgb,var(--text) 8%,var(--card));--accent-surface:color-mix(in srgb,var(--accent) 20%,var(--card));");
+        style
+    })
+}
+
 #[component]
 fn Sidebar(ui: Ui) -> impl IntoView {
+    let expanded = RwSignal::new(false);
     view! {
         <aside class="sidebar" class:nav-open=move || ui.nav.get()>
             <div class="wordmark">
@@ -59,14 +81,24 @@ fn Sidebar(ui: Ui) -> impl IntoView {
                 <span class="nav-icon">"+"</span>"Nouvelle conversation"
             </button>
             <div class="nav-group">
-                {MODES.iter().map(|(mode,label,icon)| {
+                {MODES.iter().enumerate().map(|(index,(mode,label,icon))| {
                     let (mode,label,icon)=(*mode,*label,*icon);
                     view! {
-                        <button class="nav-row" class:selected=move || ui.panel.get()=="conversation" && ui.mode.get()==mode on:click=move |_| ui.select_mode(mode)>
+                        <button class="nav-row" hidden=move || { !ui.mode_available(mode) ||
+                            index>=2 && (ui.setting("mode_navigation")=="header" || !expanded.get()) }
+                            class:selected=move || ui.panel.get()=="conversation" && ui.mode.get()==mode
+                            on:click=move |_| ui.select_mode(mode)>
                             <span class="nav-icon" aria-hidden="true">{icon}</span><span>{label}</span>
                         </button>
                     }
                 }).collect_view()}
+                <Show when=move || ui.setting("mode_navigation")!="header">
+                    <button class="nav-row more-modes" aria-expanded=move ||expanded.get().to_string()
+                        on:click=move |_|expanded.update(|value|*value=!*value)>
+                        <span class="nav-icon" aria-hidden="true">{move || if expanded.get() {"⌃"} else {"⌄"}}</span>
+                        {move || if expanded.get() {"Réduire les modes"} else {"Autres modes"}}
+                    </button>
+                </Show>
             </div>
             <div class="nav-group minor">
                 <button class="nav-row" class:selected=move || ui.panel.get()=="prompts" on:click=move |_|{ui.panel.set("prompts".into());ui.nav.set(false);}>
@@ -134,12 +166,24 @@ fn Header(ui: Ui, now: RwSignal<f64>) -> impl IntoView {
     view! {
         <header class="header">
             <button class="iconbutton nav-toggle" aria-label="Ouvrir la navigation" on:click=move |_|ui.nav.update(|v|*v=!*v)>"☰"</button>
-            <div class="header-name">{move || match ui.panel.get().as_str() {
+            <Show when=move ||ui.panel.get()=="conversation" && ui.setting("mode_navigation")=="header"
+                  fallback=move ||view!{<div class="header-name">{move || match ui.panel.get().as_str() {
                 "settings"=>"Réglages".to_owned(),
                 "prompts"=>"Prompt".to_owned(),
                 "conversation"=>mode_label(&ui.mode.get()).to_owned(),
                 id=>ui.snapshot.with(|s|list(s,"plugins").iter().find(|p|p["id"]==id).map(|p|field(p,"title")).unwrap_or_default()),
-            }}</div>
+            }}</div>}>
+                <label class="mode-picker">
+                    <span>"Mode"</span>
+                    <select aria-label="Sélecteur de mode" prop:value=move ||ui.mode.get()
+                      on:change=move |ev| {
+                        let chosen = event_target_value(&ev);
+                        if !ui.active() { ui.select_mode(&chosen); }
+                      } disabled=move ||ui.active()>
+                        {MODES.iter().map(|(mode,label,_)|view!{<option hidden=move ||!ui.mode_available(mode) value=*mode>{*label}</option>}).collect_view()}
+                    </select>
+                </label>
+            </Show>
             <Show when=move || ui.panel.get()=="conversation">
                 <button class="model-pill" on:click=move |_|{
                     if matches!(ui.mode.get_untracked().as_str(), "image" | "3d") { ui.settings("models"); }
@@ -215,6 +259,11 @@ fn Conversation(ui: Ui) -> impl IntoView {
                     <Show when=move || ui.mode.get()=="bot"><Mascot ui=ui/></Show>
                     <Show when=move || ui.messages.with(|m|m.is_empty()) && !ui.active()><Welcome ui=ui/></Show>
                     {move || ui.messages.get().into_iter().map(|message|view!{<MessageRow ui=ui message=message/>}).collect_view()}
+                    <Show when=move || ui.mode.get()=="bot" && ui.voice_ready.get() && !ui.active()>
+                        <button class="button compact voice-replay" on:click=move |_| {
+                            if ui.playing.get_untracked() { client::stop_voice(); } else { ui.replay(); }
+                        }>{move || if ui.playing.get() {"■ Arrêter la voix"} else {"↻ Réécouter la dernière réponse"}}</button>
+                    </Show>
                     <Show when=move || ui.active()>
                         <div class="message assistant stream">
                             <div class="message-badge"><span class="mini-mark">"◕"</span>"Sillune"</div>
@@ -300,6 +349,14 @@ fn Welcome(ui: Ui) -> impl IntoView {
             "Onglet Notes",
             "Crée un nouvel onglet Notes dans Sillune avec une courte liste de rappels.",
         ),
+        "themes" => (
+            "Donne une couleur à Sillune.",
+            "Décris une palette. Sillune te propose de l’appliquer et l’ajoute à tes réglages.",
+            "Encre bleue",
+            "Crée un thème sombre Encre bleue, avec un fond bleu de nuit et des accents bleus glacés.",
+            "Papier ivoire",
+            "Crée un thème clair Papier ivoire, avec des couleurs chaudes et des accents verts.",
+        ),
         _ => (
             "Par quoi on commence ?",
             "Écris, explore le web ou ouvre un fichier de travail.",
@@ -368,7 +425,7 @@ fn Composer(ui: Ui) -> impl IntoView {
                     }).collect_view()}</div>
                 </Show>
                 <textarea rows="2" aria-label="Message"
-                    placeholder=move || match ui.mode.get().as_str() {"image"=>"Décris une image…","3d"=>"Décris ton objet 3D…","plugin"=>"Décris un plugin…","bot"=>"Parle ou écris à Sillune…",_=>"Écrire à Sillune…"}
+                    placeholder=move || match ui.mode.get().as_str() {"image"=>"Décris une image…","3d"=>"Décris ton objet 3D…","plugin"=>"Décris un plugin…","themes"=>"Décris le thème que tu veux…","bot"=>"Parle ou écris à Sillune…",_=>"Écrire à Sillune…"}
                     prop:value=move || ui.composer.get()
                     on:input=move |ev|ui.composer.set(event_target_value(&ev))
                     on:keydown=move |ev:web_sys::KeyboardEvent|if ev.key()=="Enter" && !ev.shift_key() && !ev.is_composing(){ev.prevent_default();ui.send(None);}>
@@ -382,7 +439,7 @@ fn Composer(ui: Ui) -> impl IntoView {
                             aria-pressed=move ||ui.web.get().to_string() title="Lancer une recherche web pour ce message"
                             on:click=move |_|ui.web.update(|enabled|*enabled=!*enabled)>"◎ Web"</button>
                     </Show>
-                    <Show when=move || matches!(ui.mode.get().as_str(),"agent"|"bot"|"plugin")>
+                    <Show when=move || matches!(ui.mode.get().as_str(),"agent"|"bot"|"plugin"|"themes")>
                         <select class="flat-select" aria-label="Niveau de permission" prop:value=move || ui.setting("permission") on:change=move |ev|{
                             let mut settings=ui.snapshot.with_untracked(|s|s["settings"].clone());
                             settings["permission"]=json!(event_target_value(&ev));
@@ -442,7 +499,19 @@ fn MessageRow(ui: Ui, message: Value) -> impl IntoView {
                 <div class="message-badge"><span class="mini-mark">"◕"</span>"Sillune"</div>
                 <div class="markdown" on:click=link_click inner_html=markdown(&text)></div>
             }.into_any()}}
-            <div class="files">{files.into_iter().map(|file|view!{<Attachment ui=ui file=file/>}).collect_view()}</div>
+            <div class="files">{files.into_iter().map(|file| {
+                if !user && file["name"]=="sillune-voix.wav" && file["media"]=="audio/wav" {
+                    let id=field(&file,"id");
+                    view!{<button class="button compact" on:click=move |_|{
+                        let id=id.clone();
+                        spawn_local(async move {
+                            if let Ok(value)=invoke("artifact",json!({"id":id})).await {
+                                let _=wasm_bindgen_futures::JsFuture::from(client::play_voice(&field(&value,"preview"))).await;
+                            }
+                        });
+                    }>"▶ Réécouter la réponse"</button>}.into_any()
+                } else { view!{<Attachment ui=ui file=file/>}.into_any() }
+            }).collect_view()}</div>
         </article>
     }
 }

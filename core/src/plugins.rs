@@ -16,6 +16,10 @@ use wasmi::{Config, Engine, Linker, Module, Store, StoreLimits, StoreLimitsBuild
 const GUIDE: &str = include_str!("../../plugins/SKILL.md");
 const BUILTINS: &[(&str, &str)] = &[
     (
+        include_str!("../../plugins/themes/plugin.toml"),
+        include_str!("../../plugins/themes/README.md"),
+    ),
+    (
         include_str!("../../plugins/chat/plugin.toml"),
         include_str!("../../plugins/chat/README.md"),
     ),

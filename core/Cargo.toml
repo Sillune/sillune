@@ -27,5 +27,8 @@ url = "2"
 wasmi = "0.46"
 zip = { version = "4", default-features = false, features = ["deflate"] }
 
+[build-dependencies]
+serde_json.workspace = true
+
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security_Credentials"] }

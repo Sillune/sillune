@@ -393,6 +393,9 @@ impl Provider {
                 }
                 if !tools.is_empty() {
                     body["tools"] = json!(tools);
+                    if self.account == "openrouter" {
+                        body["provider"] = json!({"require_parameters":true});
+                    }
                 }
                 body
             }
@@ -557,20 +560,18 @@ impl Provider {
                 if let Some(items) = delta["reasoning_details"].as_array() {
                     result.reasoning_details.extend(items.iter().cloned());
                 }
-                if let Some(old) = delta.get("function_call") {
+                if let Some(old) = delta.get("function_call").filter(|v| v.is_object()) {
                     let call = result.call(0);
-                    call.name.push_str(&string(&old["name"]));
-                    call.input.push_str(&string(&old["arguments"]));
+                    append_function(call, old);
                 }
                 if let Some(calls) = delta["tool_calls"].as_array() {
-                    for value in calls {
-                        let call = result.call(value["index"].as_u64().unwrap_or(0) as u32);
+                    for (position, value) in calls.iter().enumerate() {
+                        let call =
+                            result.call(value["index"].as_u64().unwrap_or(position as u64) as u32);
                         if let Some(id) = value["id"].as_str() {
                             call.id = id.into();
                         }
-                        call.name.push_str(&string(&value["function"]["name"]));
-                        call.input
-                            .push_str(&string(&value["function"]["arguments"]));
+                        append_function(call, &value["function"]);
                     }
                 }
             }
@@ -633,6 +634,13 @@ impl Provider {
                     }
                     Some("response.function_call_arguments.delta") => {
                         result.call(index).input.push_str(&string(&event["delta"]))
+                    }
+                    Some("response.function_call_arguments.done") => {
+                        if let Some(args) =
+                            event["arguments"].as_str().filter(|args| !args.is_empty())
+                        {
+                            result.call(index).input = args.to_owned();
+                        }
                     }
                     Some("response.completed" | "response.incomplete") => {
                         set_usage(&mut result.usage, &event["response"]["usage"])
@@ -743,6 +751,17 @@ impl Provider {
             bail!("Le modèle a renvoyé un résultat vide");
         }
         Ok(())
+    }
+}
+
+fn append_function(call: &mut Call, function: &Value) {
+    if let Some(name) = function["name"].as_str().filter(|name| *name != call.name) {
+        call.name.push_str(name);
+    }
+    if let Some(part) = function["arguments"].as_str() {
+        call.input.push_str(part);
+    } else if function["arguments"].is_object() {
+        call.input = function["arguments"].to_string();
     }
 }
 

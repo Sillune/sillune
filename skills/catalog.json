@@ -1,0 +1,242 @@
+[
+  {
+    "id": "frontend-design",
+    "name": "Conception d’interface · Anthropic",
+    "license": "Apache-2.0",
+    "resources": []
+  },
+  {
+    "id": "test-driven-development",
+    "name": "Développement piloté par les tests · Hermes",
+    "license": "MIT",
+    "resources": []
+  },
+  {
+    "id": "architecture-diagram",
+    "name": "Architecture logicielle",
+    "license": "MIT",
+    "resources": [
+      "templates/template.html"
+    ]
+  },
+  {
+    "id": "humanizer",
+    "name": "Révision de texte",
+    "license": "MIT",
+    "resources": []
+  },
+  {
+    "id": "document-to-action-items",
+    "name": "Document vers plan d’action",
+    "license": "MIT",
+    "resources": []
+  },
+  {
+    "id": "weekly-review-planning",
+    "name": "Revue hebdomadaire",
+    "license": "MIT",
+    "resources": []
+  },
+  {
+    "id": "grounded-citations",
+    "name": "Citations vérifiables",
+    "license": "MIT",
+    "resources": [
+      "references/citation-formats.md",
+      "references/grounding-rationale.md",
+      "scripts/_hermes_home.py",
+      "scripts/sources.py"
+    ]
+  },
+  {
+    "id": "codebase-inspection",
+    "name": "Inspection de code",
+    "license": "MIT",
+    "resources": []
+  },
+  {
+    "id": "requesting-code-review",
+    "name": "Revue de code",
+    "license": "MIT",
+    "resources": []
+  },
+  {
+    "id": "simplify-code",
+    "name": "Simplification du code",
+    "license": "MIT",
+    "resources": []
+  },
+  {
+    "id": "systematic-debugging",
+    "name": "Diagnostic systématique",
+    "license": "MIT",
+    "resources": []
+  },
+  {
+    "id": "internal-comms",
+    "name": "Communication interne",
+    "license": "Apache-2.0",
+    "resources": [
+      "examples/3p-updates.md",
+      "examples/company-newsletter.md",
+      "examples/faq-answers.md",
+      "examples/general-comms.md"
+    ]
+  },
+  {
+    "id": "theme-factory",
+    "name": "Palettes de thème",
+    "license": "Apache-2.0",
+    "resources": [
+      "themes/arctic-frost.md",
+      "themes/botanical-garden.md",
+      "themes/desert-rose.md",
+      "themes/forest-canopy.md",
+      "themes/golden-hour.md",
+      "themes/midnight-galaxy.md",
+      "themes/modern-minimalist.md",
+      "themes/ocean-depths.md",
+      "themes/sunset-boulevard.md",
+      "themes/tech-innovation.md"
+    ]
+  },
+  {
+    "id": "algorithmic-art",
+    "name": "Art génératif",
+    "license": "Apache-2.0",
+    "resources": [
+      "templates/generator_template.js",
+      "templates/viewer.html"
+    ]
+  },
+  {
+    "id": "webapp-testing",
+    "name": "Tests d’application web",
+    "license": "Apache-2.0",
+    "resources": [
+      "examples/console_logging.py",
+      "examples/element_discovery.py",
+      "examples/static_html_automation.py",
+      "scripts/with_server.py"
+    ]
+  },
+  {
+    "id": "hallmark",
+    "name": "Hallmark · conception graphique",
+    "license": "MIT",
+    "resources": [
+      "references/anatomy.md",
+      "references/brand-truth.md",
+      "references/comp.md",
+      "references/craft.md",
+      "references/dark-mode.md",
+      "references/data-viz.md",
+      "references/design-md.md",
+      "references/direction.md",
+      "references/export-formats.md",
+      "references/flow.md",
+      "references/fonts.md",
+      "references/gates.md",
+      "references/genres/atmospheric.md",
+      "references/genres/editorial.md",
+      "references/genres/modern-minimal.md",
+      "references/genres/playful.md",
+      "references/imagery.md",
+      "references/interaction-and-states.md",
+      "references/layout.md",
+      "references/macrostructures.md",
+      "references/macrostructures/01-bento-grid.md",
+      "references/macrostructures/02-long-document.md",
+      "references/macrostructures/03-marquee-hero.md",
+      "references/macrostructures/04-stat-led.md",
+      "references/macrostructures/05-workbench.md",
+      "references/macrostructures/06-conversational-faq.md",
+      "references/macrostructures/07-manifesto.md",
+      "references/macrostructures/08-photographic.md",
+      "references/macrostructures/09-quote-led.md",
+      "references/macrostructures/10-specimen.md",
+      "references/macrostructures/11-catalogue.md",
+      "references/macrostructures/12-letter.md",
+      "references/macrostructures/13-index-first.md",
+      "references/macrostructures/14-narrative-workflow.md",
+      "references/macrostructures/15-split-studio.md",
+      "references/macrostructures/16-feature-stack.md",
+      "references/macrostructures/17-type-specimen.md",
+      "references/macrostructures/18-portfolio-grid.md",
+      "references/macrostructures/19-map-diagram.md",
+      "references/macrostructures/20-ecosystem-index.md",
+      "references/macrostructures/21-component-playground.md",
+      "references/microinteractions.md",
+      "references/patterns.md",
+      "references/redesign.md",
+      "references/responsive.md",
+      "references/review-finish.md",
+      "references/review-hero.md",
+      "references/scroll-choreography.md",
+      "references/texture.md",
+      "references/themes/README.md",
+      "references/themes/almanac.md",
+      "references/themes/arcade.md",
+      "references/themes/atelier.md",
+      "references/themes/bloom.md",
+      "references/themes/blueprint.md",
+      "references/themes/broadside.md",
+      "references/themes/brutal.md",
+      "references/themes/carnival.md",
+      "references/themes/cobalt.md",
+      "references/themes/console.md",
+      "references/themes/coral.md",
+      "references/themes/darkroom.md",
+      "references/themes/dose.md",
+      "references/themes/dusk.md",
+      "references/themes/editorial.md",
+      "references/themes/formwork.md",
+      "references/themes/furrow.md",
+      "references/themes/garden.md",
+      "references/themes/grid.md",
+      "references/themes/halftone.md",
+      "references/themes/hedgerow.md",
+      "references/themes/hum.md",
+      "references/themes/ink.md",
+      "references/themes/kiln.md",
+      "references/themes/loom.md",
+      "references/themes/lumen.md",
+      "references/themes/manifesto.md",
+      "references/themes/midnight.md",
+      "references/themes/newsprint.md",
+      "references/themes/overprint.md",
+      "references/themes/pasteup.md",
+      "references/themes/piste.md",
+      "references/themes/refract.md",
+      "references/themes/ribbon.md",
+      "references/themes/rim.md",
+      "references/themes/riso.md",
+      "references/themes/solstice.md",
+      "references/themes/specimen.md",
+      "references/themes/spore.md",
+      "references/themes/sport.md",
+      "references/themes/squeeze.md",
+      "references/themes/sticker.md",
+      "references/themes/studio.md",
+      "references/themes/terminal.md",
+      "references/themes/terrazzo.md",
+      "references/themes/ultraviolet.md",
+      "references/themes/vantage.md",
+      "references/themes/vellum.md",
+      "references/themes/wayfind.md",
+      "references/themes/werkstatt.md",
+      "scripts/fixtures/exemplars/atmospheric.html",
+      "scripts/fixtures/exemplars/editorial.html",
+      "scripts/fixtures/exemplars/modern-minimal.html",
+      "scripts/fixtures/exemplars/playful.html",
+      "scripts/fixtures/eyebrow-fail/index.html",
+      "scripts/fixtures/eyebrow-pass/index.html",
+      "scripts/fixtures/kept/after.html",
+      "scripts/fixtures/kept/before.html",
+      "scripts/fixtures/slopped.html",
+      "scripts/fixtures/tailwind-fail/index.html",
+      "scripts/fixtures/tailwind-pass/index.html",
+      "scripts/fixtures/waiver/index.html"
+    ]
+  }
+]

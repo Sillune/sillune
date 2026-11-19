@@ -16,6 +16,11 @@ pub fn ModelPicker(ui: Ui) -> impl IntoView {
     let error = RwSignal::new(String::new());
     let version = RwSignal::new(0u32);
     let selected_provider = Memo::new(move |_| ui.selected("provider"));
+    let selected_model = Memo::new(move |_| ui.selected("model"));
+    let reasoning = RwSignal::new(Value::Null);
+    let pending_reasoning = RwSignal::new(false);
+    let reasoning_version = RwSignal::new(0u64);
+    let draft_level = RwSignal::new(None::<u64>);
     let fetch = move |id: String, refresh: bool| {
         let ticket = version.get_untracked().wrapping_add(1);
         version.set(ticket);
@@ -36,7 +41,7 @@ pub fn ModelPicker(ui: Ui) -> impl IntoView {
     };
     Effect::new(move |_| {
         let open = ui.picker.get();
-        if !open.is_empty() {
+        if open == "models" {
             let id = selected_provider.get();
             if !id.is_empty() {
                 provider.set(id.clone());
@@ -44,6 +49,29 @@ pub fn ModelPicker(ui: Ui) -> impl IntoView {
                 fetch(id, false);
             }
         }
+    });
+    Effect::new(move |_| {
+        if ui.picker.get() != "effort" {
+            return;
+        }
+        let provider = selected_provider.get();
+        let model = selected_model.get();
+        draft_level.set(None);
+        let id = reasoning_version.get_untracked().wrapping_add(1);
+        reasoning_version.set(id);
+        pending_reasoning.set(true);
+        reasoning.set(Value::Null);
+        spawn_local(async move {
+            let result = invoke(
+                "reasoning_options",
+                json!({"provider":provider,"model":model}),
+            )
+            .await;
+            if reasoning_version.try_get_untracked() == Some(id) {
+                pending_reasoning.set(false);
+                reasoning.set(result.unwrap_or_default());
+            }
+        });
     });
     let choose = move |id: String| {
         if !id.is_empty() && id.len() <= 300 {
@@ -61,30 +89,24 @@ pub fn ModelPicker(ui: Ui) -> impl IntoView {
             panel
         });
     };
+    let saved_level = move || ui.selection.with(|s| s["effort"].as_u64());
+    let current_level = move || draft_level.get().or_else(saved_level);
     let level = move || {
-        ui.selection.with(|s| {
-            s["effort"]
-                .as_u64()
-                .and_then(|n| LEVELS.get(n as usize))
-                .copied()
-        })
+        current_level()
+            .and_then(|n| LEVELS.get(n as usize))
+            .copied()
     };
-    let supported = move || {
-        let id = ui.selected("model");
-        rows.with(|items| {
-            items
-                .iter()
-                .find(|row| row["id"] == id)
-                .and_then(|row| row["efforts"].as_array())
-                .map(|levels| {
-                    levels
-                        .iter()
-                        .filter_map(Value::as_str)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                })
-                .unwrap_or_default()
-        })
+    let save_effort = move |effort: Option<u64>| {
+        let model = ui.selected("model");
+        if model.is_empty() {
+            ui.tell("Sélectionne d’abord un modèle.");
+            return;
+        }
+        draft_level.set(None);
+        if saved_level() == effort {
+            return;
+        }
+        ui.choose(json!({"provider":ui.selected("provider"),"model":model,"effort":effort}));
     };
     view! {
         <div class="composer-picker" on:keydown=move |event:web_sys::KeyboardEvent| {
@@ -105,7 +127,8 @@ pub fn ModelPicker(ui: Ui) -> impl IntoView {
             <button class="picker-button effort-button" aria-label="Effort de raisonnement" aria-expanded=move || (ui.picker.get()=="effort").to_string()
                 on:click=move |_|toggle("effort")>
                 <span class="picker-icon" aria-hidden="true">"ϟ"</span>
-                <span>{move || level().unwrap_or("Effort")}</span>
+                <span>{move || saved_level().and_then(|n|LEVELS.get(n as usize)).copied().unwrap_or("Effort")}</span>
+                <span aria-hidden="true">"⌄"</span>
             </button>
             <Show when=move || ui.picker.get()=="models">
                 <section class="picker-popover" aria-label="Catalogue de modèles">
@@ -164,35 +187,42 @@ pub fn ModelPicker(ui: Ui) -> impl IntoView {
                 </section>
             </Show>
             <Show when=move || ui.picker.get()=="effort">
-                <section class="picker-popover effort-popover" aria-label="Réglage du raisonnement">
+                <section class="picker-popover effort-popover" aria-label="Réglage du raisonnement"
+                    class:ultra=move ||current_level()==Some(5)>
                     <div class="effort-heading">
-                        <div><small>"Raisonnement"</small><strong>{move ||level().unwrap_or("Par défaut")}</strong></div>
+                        <span class="effort-glyph" aria-hidden="true">"ϟ"</span>
+                        <div><strong>{move ||level().unwrap_or("Par défaut")}</strong><small>{move ||ui.selected("model")}</small></div>
                         <button class="iconbutton" aria-label="Rétablir l’effort par défaut" title="Rétablir l’effort par défaut"
-                            on:click=move |_|ui.choose(json!({"provider":ui.selected("provider"),"model":ui.selected("model"),"effort":null}))>"↺"</button>
+                            on:click=move |_|save_effort(None)>"↺"</button>
                     </div>
-                    <div class="effort-steps" style=move ||format!("--progress:{}%",ui.selection.with(|s|s["effort"].as_u64().map_or(0,|n|n*20)))>
+                    <div class="effort-steps" style=move ||format!("--progress:{}%",current_level().unwrap_or(0)*20)>
                         <div class="effort-track" aria-hidden="true">{(0..6).map(|_|view!{<i></i>}).collect_view()}</div>
                         <input type="range" min="0" max="5" step="1" aria-label="Niveau de raisonnement"
-                            aria-valuetext=move ||level().unwrap_or("Par défaut") disabled=move ||supported().is_empty()
-                            prop:value=move ||ui.selection.with(|s|s["effort"].as_u64().unwrap_or(0).to_string())
+                            aria-valuetext=move ||level().unwrap_or("Par défaut")
+                            prop:value=move ||current_level().unwrap_or(0).to_string()
+                            on:input=move |ev|draft_level.set(event_target_value(&ev).parse::<u64>().ok())
                             on:click=move |ev| {
-                                if ui.selection.with_untracked(|s|s["effort"].is_null())
+                                if saved_level().is_none()
                                     && let Ok(index)=event_target_value(&ev).parse::<u64>() {
-                                    ui.choose(json!({"provider":ui.selected("provider"),"model":ui.selected("model"),"effort":index}));
+                                    save_effort(Some(index));
                                 }
                             }
                             on:change=move |ev| {
                                 if let Ok(index)=event_target_value(&ev).parse::<u64>() {
-                                    ui.choose(json!({"provider":ui.selected("provider"),"model":ui.selected("model"),"effort":index}));
+                                    save_effort(Some(index));
                                 }
                             }/>
                     </div>
-                    <div class="effort-endpoints"><span>"Minimal"</span><span>"Ultra"</span></div>
                     <p class="picker-status">{move || {
-                        let list=supported();
-                        if loading.get() { "Vérification des niveaux du modèle…".into() }
-                        else if list.is_empty() { "Effort géré par le modèle.".into() }
-                        else { format!("Niveaux acceptés par le modèle · {list}") }
+                        if pending_reasoning.get() { return "Vérification du modèle…".to_owned(); }
+                        let effective=current_level().and_then(|n|reasoning.with(|r|r["effective"][n as usize].as_str().map(str::to_owned)));
+                        if let Some(effective)=effective {
+                            format!("Niveau transmis · {}", match effective.as_str() {
+                                "minimal"=>"Minimal", "low"=>"Faible", "medium"=>"Moyen", "high"=>"Élevé",
+                                "xhigh"=>"Très élevé", "max"=>"Max", "ultra"=>"Ultra", _=>&effective,
+                            })
+                        } else if current_level().is_some() { "Ce modèle gère son propre effort.".into() }
+                        else { String::new() }
                     }}</p>
                 </section>
             </Show>

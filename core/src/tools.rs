@@ -47,6 +47,7 @@ pub fn allowed(mode: Mode, tool: &str) -> bool {
             | "github_read"
             | "drive_read"
             | "plugin_docs"
+            | "load_skill"
     );
     read || (matches!(mode, Mode::Agent | Mode::Bot)
         && matches!(
@@ -61,6 +62,7 @@ pub fn allowed(mode: Mode, tool: &str) -> bool {
                 | "remember"
         ))
         || (mode == Mode::Plugin && tool == "install_plugin")
+        || (mode == Mode::Themes && tool == "install_theme")
 }
 
 pub fn asks(profile: &str, effect: Effect) -> bool {
@@ -102,6 +104,14 @@ pub fn catalog(
                 &["manifest", "readme"],
             ),
         ];
+    }
+    if mode == Mode::Themes {
+        return vec![schema(
+            "install_theme",
+            "Valider et appliquer la palette Sillune fournie dans le manifeste JSON.",
+            &["manifest"],
+            &["manifest"],
+        )];
     }
     let mut v = vec![
         schema(
@@ -195,6 +205,68 @@ pub fn arg<'a>(value: &'a Value, key: &str) -> Result<&'a str> {
     value[key]
         .as_str()
         .with_context(|| format!("Paramètre {key} manquant"))
+}
+
+pub fn enable_desktop_write(tools: &mut Vec<Value>) {
+    if let Some(write) = tools
+        .iter_mut()
+        .find(|tool| tool["function"]["name"] == "write_file")
+    {
+        write["function"]["parameters"]["properties"]["location"] = json!({"type":"string"});
+    } else {
+        tools.push(schema("write_file", "Créer un fichier sur le Bureau avec location=desktop. Indique le nom seul et le contenu.", &["path","content","location"], &["path","content","location"]));
+    }
+}
+
+pub fn skill_tool() -> Value {
+    schema(
+        "load_skill",
+        "Charger le SKILL.md d’une fiche intégrée. resource est un chemin exact de sa liste de ressources. line permet de charger la suite.",
+        &["id", "resource", "line"],
+        &["id"],
+    )
+}
+
+pub fn tool_arguments(spec: &Value, raw: &str) -> Result<Value> {
+    let mut parsed: Value = serde_json::from_str(raw).context("Arguments JSON invalides")?;
+    if let Some(inner) = parsed.as_str() {
+        parsed = serde_json::from_str(inner).context("Arguments JSON invalides")?;
+    }
+    let args = parsed
+        .as_object_mut()
+        .context("Les arguments doivent former un objet JSON")?;
+    let parameters = &spec["function"]["parameters"];
+    for key in parameters["required"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        if args.get(key).is_none_or(Value::is_null) {
+            bail!("Paramètre requis · {key}");
+        }
+    }
+    for (key, value) in args {
+        if parameters["properties"].get(key.as_str()).is_none() {
+            bail!("Paramètre non reconnu · {key}");
+        }
+        if value.is_string()
+            || (value.is_null()
+                && parameters["required"]
+                    .as_array()
+                    .is_none_or(|list| !list.iter().any(|v| v == key.as_str())))
+        {
+            continue;
+        }
+        if matches!(key.as_str(), "start" | "lines" | "issue" | "line") && value.is_u64()
+            || matches!(key.as_str(), "arguments" | "manifest") && value.is_object()
+        {
+            *value = json!(value.to_string());
+        } else {
+            bail!("Type de paramètre invalide · {key}");
+        }
+    }
+    Ok(parsed)
 }
 
 pub fn clipped(value: &str, max: usize) -> String {
@@ -538,6 +610,155 @@ pub fn explicit_search(request: &str) -> bool {
     ).unwrap()
     });
     WEB.is_match(request.trim()) && !OPT_OUT.is_match(request)
+}
+
+pub fn desktop_target(request: &str) -> bool {
+    use std::sync::LazyLock;
+    static DESKTOP: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+        r"(?i)\b(?:(?:sur\s+(?:mon|le)\s+bureau|dans\s+(?:mon|le)\s+(?:dossier\s+)?bureau|on\s+(?:my|the)\s+desktop)\b|(?:desktop|bureau)[/\\])"
+    ).unwrap()
+    });
+    DESKTOP.is_match(request)
+}
+
+pub fn empty_text_request(request: &str) -> Option<String> {
+    use std::sync::LazyLock;
+    static EMPTY: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+        r"(?i)^\s*(?:(?:stp|s'il te plaît|peux[- ]tu|tu peux|please|can you)\s+)?(?:cr[ée]e(?:r|[- ]moi)?|fais(?:[- ]moi)?|ajoute|cr[ée]ez|create|make)\s+(?:moi\s+)?(?:un|une|a|an)\s+(?:nouveau\s+)?(?:fichier(?:\s+(?:texte|txt|\.txt))?\s+(?:vide|sans contenu)|(?:empty|blank)\s+(?:text\s+)?file)\b"
+    ).unwrap()
+    });
+    static NAME: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(r#"(?i)["«`]\s*([^"»`\r\n]+\.txt)\s*["»`]|([\p{L}\p{N}_.-]+\.txt)\b"#)
+            .unwrap()
+    });
+    if request.lines().count() > 1 || request.contains(['?', ';']) || !EMPTY.is_match(request) {
+        return None;
+    }
+    let lower = request.to_lowercase();
+    if [" et ", " and ", " puis ", " ensuite ", " si ", " or "]
+        .iter()
+        .any(|key| lower.contains(key))
+    {
+        return None;
+    }
+    Some(
+        NAME.captures(request)
+            .and_then(|m| m.get(1).or_else(|| m.get(2)))
+            .map_or_else(
+                || "Nouveau fichier.txt".into(),
+                |name| name.as_str().to_owned(),
+            ),
+    )
+}
+
+pub fn requested_action(mode: Mode, request: &str) -> bool {
+    if matches!(mode, Mode::Plugin | Mode::Themes) {
+        return true;
+    }
+    use std::sync::LazyLock;
+    static ACTION: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+        r"(?i)^\s*(?:(?:peux[- ]tu|tu peux|j'aimerais que tu|merci de|please|can you)\s+)?(?:cr[ée]e(?:r|[- ]moi)?|[ée]cris|[ée]crit|modifi(?:e|er)|ajoute|supprime|ouvre|lis|liste|g[ée]n[èe]re|pr[ée]pare|enregistre|installe|ex[ée]cute|lance|create|make|write|edit|open|read|list|remove|run|install|delete)\b"
+    ).unwrap()
+    });
+    let lower = request.to_lowercase();
+    matches!(mode, Mode::Chat | Mode::Agent | Mode::Bot)
+        && ACTION.is_match(request)
+        && [
+            "fichier",
+            "file",
+            "dossier",
+            "répertoire",
+            "folder",
+            "bureau",
+            "desktop",
+            "terminal",
+            "command",
+            "issue",
+            "repo",
+            "drive",
+            "mcp",
+            "plugin",
+            "projet",
+            "project",
+            "html",
+        ]
+        .iter()
+        .any(|word| lower.contains(word))
+}
+
+pub fn is_read_tool(name: &str) -> bool {
+    matches!(
+        name,
+        "list_files"
+            | "read_file"
+            | "attach_file"
+            | "web_search"
+            | "open_page"
+            | "recall"
+            | "github_read"
+            | "drive_read"
+            | "plugin_docs"
+            | "mcp_tools"
+            | "load_skill"
+    )
+}
+
+pub fn is_goal_tool(mode: Mode, request: &str, name: &str) -> bool {
+    if mode == Mode::Plugin {
+        return name == "install_plugin";
+    }
+    if mode == Mode::Themes {
+        return name == "install_theme";
+    }
+    let lower = request.to_lowercase();
+    if ["lis ", "read ", "liste ", "list ", "ouvre ", "open "]
+        .iter()
+        .any(|word| lower.contains(word))
+    {
+        return matches!(
+            name,
+            "list_files"
+                | "read_file"
+                | "attach_file"
+                | "github_read"
+                | "drive_read"
+                | "mcp_call"
+                | "open_page"
+        );
+    }
+    if ["supprime", "delete", "remove"]
+        .iter()
+        .any(|word| lower.contains(word))
+    {
+        return name == "remove_file";
+    }
+    if ["fichier", "file", "html"]
+        .iter()
+        .any(|word| lower.contains(word))
+    {
+        if mode == Mode::Chat {
+            return name == "deliver_file"
+                && !desktop_target(request)
+                && ![
+                    "dans mon dossier",
+                    "dans le dossier",
+                    "dans ce dossier",
+                    "on disk",
+                    "on my pc",
+                    "sur disque",
+                    "sur mon pc",
+                ]
+                .iter()
+                .any(|destination| lower.contains(destination));
+        }
+        return matches!(name, "write_file" | "terminal")
+            || name == "deliver_file"
+                && (lower.contains("chat") || lower.contains("pièce jointe"));
+    }
+    !is_read_tool(name)
 }
 
 fn public_ip(ip: IpAddr) -> bool {

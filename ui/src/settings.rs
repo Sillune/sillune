@@ -15,11 +15,25 @@ pub const PROVIDERS: &[(&str, &str, &str)] = &[
 
 #[component]
 pub fn SettingsPage(ui: Ui) -> impl IntoView {
-    let draft = RwSignal::new(ui.snapshot.with_untracked(|s| s["settings"].clone()));
-    let mcp_json = RwSignal::new(
-        serde_json::to_string_pretty(&draft.with_untracked(|s| s["mcp"].clone()))
-            .unwrap_or("[]".into()),
-    );
+    let draft = RwSignal::new(Value::Null);
+    let mcp_json = RwSignal::new("[]".to_owned());
+    Effect::new(move |_| {
+        if draft.with_untracked(Value::is_null)
+            && let Some(settings) = ui.snapshot.with(|state| {
+                state["settings"]
+                    .as_object()
+                    .map(|_| state["settings"].clone())
+            })
+        {
+            mcp_json.set(
+                serde_json::to_string_pretty(
+                    &settings["mcp"].as_array().cloned().unwrap_or_default(),
+                )
+                .unwrap_or_else(|_| "[]".into()),
+            );
+            draft.set(settings);
+        }
+    });
     let save = move |_| {
         let mut settings = draft.get_untracked();
         match serde_json::from_str::<Value>(&mcp_json.get_untracked()) {
@@ -40,12 +54,13 @@ pub fn SettingsPage(ui: Ui) -> impl IntoView {
     ];
     view! {
         <section class="page settings-page">
-            <div class="section-head"><h1>"Réglages"</h1><button class="button primary" on:click=save>"Enregistrer"</button></div>
+            <div class="section-head"><h1>"Réglages"</h1><button class="button primary" disabled=move ||draft.with(Value::is_null) on:click=save>"Enregistrer"</button></div>
             <nav class="settings-tabs" aria-label="Rubriques de réglage">
                 {tabs.into_iter().map(|(id,title)|view!{
                     <button class="tab-button" class:selected=move ||ui.settings_tab.get()==id on:click=move |_|ui.settings_tab.set(id.into())>{title}</button>
                 }).collect_view()}
             </nav>
+            <Show when=move ||draft.with(Value::is_object) fallback=||view!{<p role="status">"Chargement des réglages…"</p>}>
             {move || match ui.settings_tab.get().as_str() {
                 "models"=>view!{<Models ui=ui draft=draft/>}.into_any(),
                 "connectors"=>view!{<Connectors ui=ui draft=draft mcp_json=mcp_json/>}.into_any(),
@@ -53,6 +68,7 @@ pub fn SettingsPage(ui: Ui) -> impl IntoView {
                 "plugins"=>view!{<Plugins ui=ui/>}.into_any(),
                 _=>view!{<General ui=ui draft=draft/>}.into_any(),
             }}
+            </Show>
         </section>
     }
 }
@@ -82,6 +98,16 @@ fn General(ui: Ui, draft: RwSignal<Value>) -> impl IntoView {
             <label>"Thème"
                 <select prop:value=move ||draft.with(|s|field(s,"theme")) on:change=move |ev|set(draft,"theme",event_target_value(&ev))>
                     <option value="system">"Système"</option><option value="dark">"Sombre"</option><option value="light">"Clair"</option>
+                    <option value="cobalt">"Cobalt"</option>
+                    {move || ui.snapshot.with(|s| s["themes"].as_object().into_iter().flat_map(|themes|themes.values().cloned()).collect::<Vec<_>>())
+                         .into_iter().map(|theme|view!{<option value={field(&theme,"id")}>{field(&theme,"name")}</option>}).collect_view()}
+                </select>
+            </label>
+            <label>"Sélecteur de modes"
+                <select prop:value=move ||draft.with(|s|field(s,"mode_navigation"))
+                    on:change=move |ev|set(draft,"mode_navigation",event_target_value(&ev))>
+                    <option value="sidebar">"Barre latérale · Chat, Agent et autres modes"</option>
+                    <option value="header">"En haut · Sélecteur de mode"</option>
                 </select>
             </label>
         </div>
@@ -156,7 +182,7 @@ fn Models(ui: Ui, draft: RwSignal<Value>) -> impl IntoView {
             <Pack ui=ui id="quality" title="Image · FLUX.2 klein 4B quantifié"/>
             <Pack ui=ui id="zimage" title="Image · Z-Image Turbo Q4"/>
             <Pack ui=ui id="shape" title="3D · Shap-E"/>
-            <p class="subtle">"Shap-E nécessite Python 3.12 sur Windows. L’installation prépare aussi les dépendances de calcul."</p>
+            <p class="subtle">"Sillune prépare Python et les dépendances de Shap-E lors de l’installation."</p>
             <Pack ui=ui id="voice" title="Bot · LFM3-Audio-2B français"/>
             <details class="advanced">
                 <summary>"Dossier des moteurs et modèles"</summary>

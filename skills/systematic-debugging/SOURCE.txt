@@ -1,0 +1,1 @@
+https://github.com/NousResearch/hermes-agent/blob/dfa38d1f8db644200c7bbe9b366c79c3881d9462/skills/software-development/systematic-debugging/SKILL.md

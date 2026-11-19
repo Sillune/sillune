@@ -1,0 +1,5 @@
+id = "themes"
+title = "Thèmes"
+description = "Créer une palette pour Sillune et l’appliquer depuis les réglages."
+kind = "mode"
+version = "1.0.0"

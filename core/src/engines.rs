@@ -104,10 +104,18 @@ impl Engines {
     }
 
     fn binary(&self, settings: &Settings, pack: &Pack) -> Option<PathBuf> {
+        if pack.folder == "shape" {
+            return self.roots(settings).into_iter().find_map(|root| {
+                ["venv-v2", "venv"]
+                    .into_iter()
+                    .map(|venv| root.join("shape").join(venv).join("Scripts/python.exe"))
+                    .find(|path| path.is_file() && mesh::ready(path))
+            });
+        }
         self.roots(settings)
             .into_iter()
             .map(|r| r.join(&pack.folder).join(&pack.binary))
-            .find(|p| p.is_file() && (pack.folder != "shape" || mesh::ready(p)))
+            .find(|p| p.is_file())
     }
 
     fn model(&self, settings: &Settings, asset: &Asset) -> Option<PathBuf> {
@@ -163,6 +171,7 @@ impl Engines {
         id: &str,
         cancel: &CancellationToken,
         mut progress: impl FnMut(u64, u64) + Send,
+        status: impl Fn(&str) + Send + Sync,
     ) -> Result<()> {
         let _guard = self
             .download
@@ -192,7 +201,7 @@ impl Engines {
             tokio::task::spawn_blocking(move || extract(&target, &dest_clone)).await??;
             done += archive.size;
         } else if id == "shape" && archive_needed {
-            mesh::install(&self.root.join(&pack.folder), cancel).await?;
+            mesh::install(&self.root.join(&pack.folder), cancel, status).await?;
         }
         for asset in missing {
             let target = self.root.join("Models").join(&asset.file);
@@ -200,7 +209,8 @@ impl Engines {
             download_asset(&client, asset, &target, cancel, |n| {
                 progress(done + n, total)
             })
-            .await?;
+            .await
+            .map_err(|e| anyhow::anyhow!("Téléchargement de {} · {e:#}", asset.file))?;
             done += asset.size;
         }
         progress(total, total);

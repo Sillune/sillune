@@ -91,6 +91,34 @@ async fn answer(mut socket: TcpStream) -> anyhow::Result<()> {
             && body["reasoning_effort"] == "xhigh"
             && body["tools"].is_null();
         json!({"choices":[{"delta":{"content":if works {"Recherche, modèle et effort vérifiés."} else {"Données manquantes."}}}]})
+    } else if text.contains("secours.txt") {
+        let content = if body["messages"][0]["content"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("uniquement avec")
+            && body["tools"].is_null()
+        {
+            json!({"tool":"write_file","arguments":{"path":"secours.txt","content":"preuve"}})
+                .to_string()
+        } else {
+            anyhow::ensure!(
+                !body["tools"]
+                    .as_array()
+                    .unwrap_or(&Vec::new())
+                    .iter()
+                    .any(|tool| tool["function"]["name"] == "web_search")
+            );
+            "Je vais créer le fichier.".to_owned()
+        };
+        json!({"choices":[{"delta":{"content":content}}]})
+    } else if text.contains("palette encre") {
+        let manifest = json!({"id":"encre","name":"Encre","scheme":"dark","colors":{
+            "background":"#101723","sidebar":"#131d2c","surface":"#1b2a40","text":"#f4f7ff",
+            "muted":"#b4c2db","accent":"#90b9ff","border":"#3a5173"
+        }});
+        json!({"choices":[{"delta":{"tool_calls":[{"id":"theme-0","function":{
+            "name":"install_theme","arguments":{"manifest":manifest}
+        }}]}}]})
     } else if text.contains("ancienne syntaxe") {
         json!({"choices":[{"delta":{"function_call":{"name":"deliver_file","arguments":"{\"name\":\"ancien.txt\",\"content\":\"Pièce jointe\"}"}}}]})
     } else if latest["role"] == "tool" {
@@ -157,6 +185,107 @@ async fn poll_for(
 
 fn artifact_id(poll: &Value) -> &str {
     poll["files"][0]["id"].as_str().expect("pièce jointe")
+}
+
+#[tokio::test]
+async fn creates_empty_desktop_file_with_permission_and_no_provider() {
+    let root = tempfile::tempdir().unwrap();
+    let desktop = root.path().join("Bureau");
+    std::fs::create_dir(&desktop).unwrap();
+    let app = App::open_with_desktop(root.path().join("profil"), Some(desktop.clone())).unwrap();
+    app.store
+        .save_settings(&Settings {
+            provider: "compatible".into(),
+            ..Settings::default()
+        })
+        .unwrap();
+    let agent = session(&app, "agent").await;
+    let prompt = "Crée un fichier texte vide nommé « Fichier vide.txt » sur mon bureau.";
+    app.dispatch("start", json!({"session":agent,"text":prompt}))
+        .await
+        .unwrap();
+    let pending = poll(&app, &agent, |v| {
+        !v["approval"].is_null() || v["done"] == true
+    })
+    .await;
+    assert!(
+        pending["approval"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Bureau → Fichier vide.txt")
+    );
+    assert!(!desktop.join("Fichier vide.txt").exists());
+    app.dispatch(
+        "approve",
+        json!({"id":pending["approval"]["id"],"allow":true}),
+    )
+    .await
+    .unwrap();
+    let done = poll(&app, &agent, |v| v["done"] == true).await;
+    assert_eq!(done["error"], "");
+    assert_eq!(
+        done["text"],
+        "Fichier créé sur le Bureau · Fichier vide.txt"
+    );
+    assert_eq!(
+        std::fs::read(desktop.join("Fichier vide.txt")).unwrap(),
+        b""
+    );
+    app.dispatch("start", json!({"session":agent,"text":prompt}))
+        .await
+        .unwrap();
+    assert!(
+        poll(&app, &agent, |v| v["done"] == true).await["error"]
+            .as_str()
+            .unwrap()
+            .contains("existe déjà")
+    );
+}
+
+#[tokio::test]
+async fn structured_recovery_and_theme_install_follow_mode() {
+    let root = tempfile::tempdir().unwrap();
+    let settings = Settings {
+        provider: "compatible".into(),
+        url: fixture().await,
+        model: "fixture".into(),
+        permission: "all".into(),
+        workspace: root.path().display().to_string(),
+        ..Settings::default()
+    };
+    let app = App::open(root.path().join("profil")).unwrap();
+    app.store.save_settings(&settings).unwrap();
+    let agent = session(&app, "agent").await;
+    app.dispatch(
+        "start",
+        json!({"session":agent,"text":"Crée le fichier secours.txt dans le dossier de travail."}),
+    )
+    .await
+    .unwrap();
+    let response = poll(&app, &agent, |v| v["done"] == true).await;
+    assert_eq!(response["error"], "");
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("secours.txt")).unwrap(),
+        "preuve"
+    );
+    assert!(!response["text"].as_str().unwrap().contains("Je vais"));
+
+    let theme = session(&app, "themes").await;
+    app.dispatch(
+        "start",
+        json!({"session":theme,"text":"Crée une palette encre."}),
+    )
+    .await
+    .unwrap();
+    let response = poll(&app, &theme, |v| v["done"] == true).await;
+    assert_eq!(response["error"], "");
+    let status = app.dispatch("snapshot", json!({})).await.unwrap();
+    assert_eq!(status["settings"]["theme"], "encre");
+    assert_eq!(
+        status["themes"]["encre"]["colors"]["accent_text"],
+        "#000000"
+    );
+    assert!(status["skills"].as_array().unwrap().len() >= 15);
 }
 
 #[tokio::test]
@@ -494,8 +623,24 @@ async fn local_image_and_french_voice() {
     app.dispatch("start", body).await.unwrap();
     let result = poll(&app, &bot, |v| v["done"] == true).await;
     assert_eq!(result["error"], "");
-    let (_, wav) = app.store.artifact(artifact_id(&result)).unwrap();
+    assert_eq!(result["voice"], true);
+    assert!(result["files"].as_array().unwrap().is_empty());
+    use base64::{Engine as _, engine::general_purpose::STANDARD};
+    let playback = app
+        .dispatch("voice_audio", json!({"session":bot}))
+        .await
+        .unwrap();
+    let wav = STANDARD
+        .decode(playback.as_str().unwrap().split_once(',').unwrap().1)
+        .unwrap();
     assert_eq!(&wav[..4], b"RIFF");
+    let reopened = App::open(root.path().into()).unwrap();
+    assert!(
+        reopened
+            .dispatch("voice_audio", json!({"session":bot}))
+            .await
+            .is_err()
+    );
     println!(
         "Bot LFM3: {} octets WAV, {} événements",
         wav.len(),

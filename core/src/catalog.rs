@@ -298,6 +298,18 @@ pub fn known_efforts(provider: &str, id: &str) -> &'static [&'static str] {
     }
 }
 
+pub async fn efforts(settings: &Settings) -> Vec<String> {
+    if let Ok(models) = list(settings, false).await
+        && let Some(model) = models.into_iter().find(|m| m.id == settings.model)
+    {
+        return model.efforts;
+    }
+    known_efforts(&settings.provider, &settings.model)
+        .iter()
+        .map(|level| (*level).into())
+        .collect()
+}
+
 pub fn effective(level: u8, values: &[String]) -> Option<String> {
     let score = |value: &str| match value {
         "minimal" => Some(0),

@@ -9,19 +9,21 @@ Sillune est un assistant IA Windows. Le noyau, l’interface Leptos et le SDK de
 3. Dans **Réglages → Général**, choisir le dossier de travail et le profil d’autorisation.
 4. Dans **Réglages → Modèles → Modèles locaux**, cliquer sur **Installer** pour chaque pack souhaité. Le code source et l’archive Windows sont livrés sans modèles. Le panneau affiche la taille, l’origine, la licence et l’empreinte des fichiers.
 
-Le **Chat** recherche, lit et livre des fichiers à prévisualiser. Le bouton **Web** force une recherche pour le message, y compris avec un modèle qui ne prend pas en charge les appels d’outils. **Agent** ajoute les actions de fichiers, le terminal et les connecteurs.
+Le **Chat** recherche, lit et livre des fichiers à prévisualiser. Le bouton **Web** force une recherche pour le message, y compris avec un modèle qui ne prend pas en charge les appels d’outils. **Agent** ajoute les actions de fichiers, le terminal et les connecteurs. Il peut créer un nouveau fichier sur le Bureau Windows quand cette destination est demandée explicitement. Une demande locale utilise les outils locaux et reste soumise au profil de permissions.
 
 Le sélecteur près de la saisie récupère le catalogue du fournisseur et garde le modèle choisi dans chaque conversation. **Effort** propose six crans de Minimal à Ultra. Sillune transmet l’effort compatible et l’affiche dans l’activité du tour.
 
-**Image** propose SDXS, FLUX.2 klein et Z-Image Turbo. Les deux derniers peuvent générer à 1 024 × 1 024. **3D** génère un maillage coloré Shap-E, avec aperçu interactif et export GLB. Installer Python 3.12 sous Windows avant le pack Shap-E. La génération utilise un PyTorch XPU disponible pour Intel ou le CPU.
+**Image** propose SDXS, FLUX.2 klein et Z-Image Turbo. Les deux derniers peuvent générer à 1 024 × 1 024. **3D** génère un maillage coloré Shap-E, avec aperçu interactif et export GLB. Le bouton d’installation prépare un environnement isolé et télécharge Python 3.12 si nécessaire. La génération utilise un PyTorch XPU disponible pour Intel ou le CPU.
 
-**Bot** transcrit le micro ou un WAV avec LFM3. La voix de sortie se configure indépendamment du modèle de conversation. Le choix inclut LFM3 local et les voix Marin et Cedar si une clé OpenAI est enregistrée. Si aucun fournisseur distant n’est configuré, le pack LFM3 peut aussi rédiger la réponse. **Plugin** crée et installe une extension depuis une demande en français.
+**Bot** transcrit le micro ou un WAV avec LFM3. La voix de sortie se configure indépendamment du modèle de conversation. Le choix inclut LFM3 local et les voix Marin et Cedar si une clé OpenAI est enregistrée. Si aucun fournisseur distant n’est configuré, le pack LFM3 peut aussi rédiger la réponse. La dernière réponse vocale reste réécoutable en mémoire pendant l’ouverture de l’app. **Plugin** crée et installe une extension depuis une demande en français.
+
+**Thèmes** crée et applique des palettes validées que l’on retrouve ensuite dans **Réglages → Général**. **Cobalt** est fourni, avec une palette bleu nuit et des accents électriques. Dans les mêmes réglages, on peut déplacer le sélecteur des modes dans la barre supérieure.
 
 ## Extensions et mémoire
 
 Le dossier local `plugins/` contient un manifeste et un README par plugin. Le mode Plugin charge `plugins/SKILL.md`, qui explique le SDK et répertorie les extensions. Les minuteurs occupent la barre supérieure. Les onglets s’ouvrent depuis la barre latérale. Les widgets WebAssembly reçoivent les valeurs exposées par le SDK. Leur création demande Rust et la cible `wasm32-unknown-unknown` installés. Le panneau Plugins permet de consulter les README, d’activer, de désactiver et de désinstaller une extension ajoutée.
 
-**Réglages → Mémoire** active la mémoire entre conversations. Le profil garde les notes modifiables, les suggestions à valider et un index local de l’historique. Les skills de départ se lisent depuis **Réglages → Plugins**. Pour appliquer un skill à un tour, écrire `/skill frontend-design` ou `/skill test-driven-development` dans le message.
+**Réglages → Mémoire** active la mémoire entre conversations. Le profil garde les notes modifiables, les suggestions à valider et un index local de l’historique. Les guides intégrés de Hermes Agent, Anthropic et Hallmark se lisent depuis **Réglages → Plugins**. Pour choisir un guide pour le tour, écrire par exemple `/skill systematic-debugging` ou `/skill hallmark`. En mode Agent, le modèle peut charger un guide et les ressources associées à la demande.
 
 Pour Google Drive, enregistrer un jeton autorisé ou connecter dans le navigateur un client OAuth Google Desktop. Le périmètre `drive.file` regroupe les fichiers accordés à ce client et ceux que l’application crée. Le connecteur GitHub utilise un jeton limité aux dépôts souhaités. Les serveurs MCP locaux et HTTP se déclarent dans **Connecteurs**.
 

@@ -83,6 +83,7 @@ pub const MODES: &[(&str, &str, &str)] = &[
     ("3d", "3D", "◇"),
     ("bot", "Bot", "◒"),
     ("plugin", "Plugin", "⊞"),
+    ("themes", "Thèmes", "✧"),
 ];
 
 pub fn mode_label(mode: &str) -> &'static str {
@@ -115,6 +116,7 @@ pub struct Ui {
     pub image_profile: RwSignal<String>,
     pub selection: RwSignal<Value>,
     pub web: RwSignal<bool>,
+    pub voice_ready: RwSignal<bool>,
     pub picker: RwSignal<&'static str>,
     pub busy: RwSignal<bool>,
     pub nav: RwSignal<bool>,
@@ -143,6 +145,7 @@ impl Ui {
             image_profile: RwSignal::new("image".into()),
             selection: RwSignal::new(Value::Null),
             web: RwSignal::new(false),
+            voice_ready: RwSignal::new(false),
             picker: RwSignal::new(""),
             busy: RwSignal::new(false),
             nav: RwSignal::new(false),
@@ -178,6 +181,34 @@ impl Ui {
         } else {
             selected
         }
+    }
+
+    pub fn mode_available(self, id: &str) -> bool {
+        self.snapshot.with(|s| {
+            list(s, "plugins")
+                .iter()
+                .find(|p| p["id"] == id)
+                .is_none_or(|p| p["active"] == true)
+        })
+    }
+
+    pub fn replay(self) {
+        let session = self.session.get_untracked();
+        if session.is_empty() {
+            return;
+        }
+        spawn_local(async move {
+            match invoke("voice_audio", json!({"session":session})).await {
+                Ok(value) if self.session.get_untracked() == session => {
+                    let _ = JsFuture::from(play_voice(value.as_str().unwrap_or_default())).await;
+                }
+                Ok(_) => {}
+                Err(e) => {
+                    self.voice_ready.set(false);
+                    self.tell(e);
+                }
+            }
+        });
     }
 
     pub fn choose(self, selection: Value) {
@@ -229,6 +260,7 @@ impl Ui {
         self.session.set(String::new());
         self.selection.set(Value::Null);
         self.web.set(false);
+        self.voice_ready.set(false);
         self.picker.set("");
         self.composer.set(String::new());
         self.messages.set(Vec::new());
@@ -247,6 +279,9 @@ impl Ui {
         self.session.set(field(&row, "id"));
         self.selection.set(Value::Null);
         self.web.set(false);
+        stop_voice();
+        self.playing.set(false);
+        self.voice_ready.set(false);
         self.picker.set("");
         self.job.set(Value::Null);
         self.messages.set(Vec::new());
@@ -262,6 +297,7 @@ impl Ui {
         match invoke("messages", json!({"session":session})).await {
             Ok(result) if self.session.get_untracked() == session => {
                 self.messages.set(list(&result, "messages"));
+                self.voice_ready.set(result["voice"] == true);
                 if preferences && self.selection.with_untracked(Value::is_null) {
                     self.selection.set(result["preferences"].clone());
                 }
@@ -405,13 +441,9 @@ impl Ui {
                             }
                             if self.mode.get_untracked() == "bot"
                                 && !self.quiet.get_untracked()
-                                && let Some(voice) = list(&job, "files")
-                                    .into_iter()
-                                    .find(|f| f["media"] == "audio/wav")
-                                && let Ok(value) =
-                                    invoke("artifact", json!({"id":voice["id"]})).await
+                                && job["voice"] == true
                             {
-                                let _ = JsFuture::from(play_voice(&field(&value, "preview"))).await;
+                                self.replay();
                             }
                         }
                         self.job.set(job);
