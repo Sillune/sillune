@@ -263,9 +263,21 @@ fn Pack(ui: Ui, id: &'static str, title: &'static str) -> impl IntoView {
     let status = RwSignal::new(Value::Null);
     let downloading = move || status.with(|v| !v.is_null() && v["done"] != true);
     let start = move |_| {
-        status.set(json!({"done":false,"detail":"Préparation…","progress":0.0}));
+        status.set(json!({"done":false,"detail":"Choisis le dossier du pack…","progress":0.0}));
         spawn_local(async move {
-            let session = match invoke("download", json!({"pack":id})).await {
+            let folder = match native("choose_folder", json!({})).await {
+                Ok(value) if value.is_string() => value,
+                Ok(_) => {
+                    let _ = status.try_set(Value::Null);
+                    return;
+                }
+                Err(e) => {
+                    ui.tell(e);
+                    let _ = status.try_set(Value::Null);
+                    return;
+                }
+            };
+            let session = match invoke("download", json!({"pack":id,"folder":folder})).await {
                 Ok(v) => field(&v, "session"),
                 Err(e) => {
                     ui.tell(e);
@@ -319,6 +331,9 @@ fn Pack(ui: Ui, id: &'static str, title: &'static str) -> impl IntoView {
             <Show when=downloading>
                 <progress max="1" prop:value=move ||status.with(|v|v["progress"].as_f64().unwrap_or(0.0))></progress>
                 <p class="subtle">{move ||status.with(|v|field(v,"detail"))}</p>
+            </Show>
+            <Show when=move ||ui.snapshot.with(|s|s["packs"][id]["folder"].is_string())>
+                <p class="digest">{move ||ui.snapshot.with(|s|field(&s["packs"][id],"folder"))}</p>
             </Show>
             <details class="advanced">
                 <summary>"Provenance et empreintes"</summary>

@@ -2,7 +2,12 @@ use anyhow::{Result, bail};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::{fs, path::Path, sync::Mutex};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    sync::Mutex,
+};
 use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -21,6 +26,8 @@ pub struct Settings {
     pub memory: bool,
     pub mcp: Vec<McpConfig>,
     pub engines: String,
+    #[serde(skip)]
+    pub pack_folders: BTreeMap<String, PathBuf>,
     pub voice: String,
 }
 
@@ -49,6 +56,7 @@ impl Default for Settings {
             memory: false,
             mcp: Vec::new(),
             engines: String::new(),
+            pack_folders: BTreeMap::new(),
             voice: "local-female".into(),
         }
     }
@@ -146,10 +154,19 @@ impl Store {
                 r.get::<_, String>(0)
             })
             .optional()?;
-        Ok(row
+        let mut settings: Settings = row
             .map(|s| serde_json::from_str(&s))
             .transpose()?
-            .unwrap_or_default())
+            .unwrap_or_default();
+        let mut query =
+            db.prepare("SELECT substr(name, 13), data FROM kv WHERE name GLOB 'pack-folder/*'")?;
+        for row in query.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))? {
+            let (id, path) = row?;
+            settings
+                .pack_folders
+                .insert(id, serde_json::from_str(&path)?);
+        }
+        Ok(settings)
     }
 
     pub fn save_settings(&self, settings: &Settings) -> Result<()> {

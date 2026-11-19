@@ -94,7 +94,10 @@ impl Engines {
         })
     }
 
-    fn roots(&self, settings: &Settings) -> Vec<PathBuf> {
+    fn roots(&self, settings: &Settings, id: &str) -> Vec<PathBuf> {
+        if let Some(folder) = settings.pack_folders.get(id) {
+            return vec![folder.clone()];
+        }
         let mut paths = Vec::new();
         if !settings.engines.is_empty() {
             paths.push(PathBuf::from(&settings.engines));
@@ -103,30 +106,30 @@ impl Engines {
         paths
     }
 
-    fn binary(&self, settings: &Settings, pack: &Pack) -> Option<PathBuf> {
+    fn binary(&self, settings: &Settings, id: &str, pack: &Pack) -> Option<PathBuf> {
         if pack.folder == "shape" {
-            return self.roots(settings).into_iter().find_map(|root| {
+            return self.roots(settings, id).into_iter().find_map(|root| {
                 ["venv-v2", "venv"]
                     .into_iter()
                     .map(|venv| root.join("shape").join(venv).join("Scripts/python.exe"))
                     .find(|path| path.is_file() && mesh::ready(path))
             });
         }
-        self.roots(settings)
+        self.roots(settings, id)
             .into_iter()
             .map(|r| r.join(&pack.folder).join(&pack.binary))
             .find(|p| p.is_file())
     }
 
-    fn model(&self, settings: &Settings, asset: &Asset) -> Option<PathBuf> {
-        self.roots(settings)
+    fn model(&self, settings: &Settings, id: &str, asset: &Asset) -> Option<PathBuf> {
+        self.roots(settings, id)
             .into_iter()
             .map(|r| r.join("Models").join(&asset.file))
             .find(|path| asset_present(path, asset))
     }
 
-    fn model_folder(&self, settings: &Settings, pack: &Pack) -> Option<PathBuf> {
-        self.roots(settings)
+    fn model_folder(&self, settings: &Settings, id: &str, pack: &Pack) -> Option<PathBuf> {
+        self.roots(settings, id)
             .into_iter()
             .map(|root| root.join("Models"))
             .find(|root| {
@@ -139,25 +142,25 @@ impl Engines {
     pub fn reference_model(&self, settings: &Settings) -> Option<&'static str> {
         ["zimage", "quality", "image"].into_iter().find(|id| {
             let pack = &self.packs[*id];
-            self.binary(settings, pack).is_some() && self.missing(settings, pack).is_empty()
+            self.binary(settings, id, pack).is_some() && self.missing(settings, id, pack).is_empty()
         })
     }
 
     pub fn require_trellis(&self, settings: &Settings) -> Result<(PathBuf, PathBuf)> {
         let pack = &self.packs["trellis"];
-        let binary = self.binary(settings, pack);
-        let models = self.model_folder(settings, pack);
+        let binary = self.binary(settings, "trellis", pack);
+        let models = self.model_folder(settings, "trellis", pack);
         binary
             .zip(models)
             .context("Installe TRELLIS.2 dans Réglages → Modèles locaux")
     }
 
-    fn missing<'a>(&self, settings: &Settings, pack: &'a Pack) -> Vec<&'a Asset> {
+    fn missing<'a>(&self, settings: &Settings, id: &str, pack: &'a Pack) -> Vec<&'a Asset> {
         if matches!(pack.folder.as_str(), "shape" | "trellis") {
-            if self.model_folder(settings, pack).is_some() {
+            if self.model_folder(settings, id, pack).is_some() {
                 return Vec::new();
             }
-            let local = self.root.join("Models");
+            let local = self.install_root(settings, id).join("Models");
             return pack
                 .files
                 .iter()
@@ -166,19 +169,24 @@ impl Engines {
         }
         pack.files
             .iter()
-            .filter(|asset| self.model(settings, asset).is_none())
+            .filter(|asset| self.model(settings, id, asset).is_none())
             .collect()
     }
 
     pub fn status(&self, settings: &Settings) -> Value {
         let rows = self.packs.iter().map(|(id,p)| {
-            let missing = self.missing(settings, p).iter().map(|a|a.size).sum::<u64>();
-            let binary = self.binary(settings, p).is_some();
+            let missing = self.missing(settings, id, p).iter().map(|a|a.size).sum::<u64>();
+            let binary = self.binary(settings, id, p).is_some();
             (id.clone(),json!({"name":p.name,"license":p.license,"ready":missing == 0 && binary,
+                "folder": settings.pack_folders.get(id),
                 "missing":missing + if binary { 0 } else { p.archive.as_ref().map_or(0, |a| a.size) },
                 "files":p.files.iter().map(|a| json!({"name":a.file,"url":a.url,"sha":a.sha,"size":a.size})).collect::<Vec<_>>()}))
         }).collect::<serde_json::Map<_,_>>();
         Value::Object(rows)
+    }
+
+    fn install_root<'a>(&'a self, settings: &'a Settings, id: &str) -> &'a Path {
+        settings.pack_folders.get(id).unwrap_or(&self.root)
     }
 
     pub async fn install(
@@ -194,9 +202,10 @@ impl Engines {
             .try_lock()
             .map_err(|_| anyhow::anyhow!("Un pack est déjà en cours de téléchargement"))?;
         let pack = self.packs.get(id).context("Pack inconnu")?;
-        fs::create_dir_all(self.root.join("Models"))?;
-        let archive_needed = self.binary(settings, pack).is_none();
-        let missing = self.missing(settings, pack);
+        let root = self.install_root(settings, id);
+        fs::create_dir_all(root.join("Models"))?;
+        let archive_needed = self.binary(settings, id, pack).is_none();
+        let missing = self.missing(settings, id, pack);
         let total = missing.iter().map(|a| a.size).sum::<u64>()
             + if archive_needed {
                 pack.archive.as_ref().map_or(0, |a| a.size)
@@ -210,17 +219,17 @@ impl Engines {
             .timeout(Duration::from_secs(1500))
             .build()?;
         if let Some(archive) = pack.archive.as_ref().filter(|_| archive_needed) {
-            let target = self.root.join(&archive.file);
+            let target = root.join(&archive.file);
             download_asset(&client, archive, &target, cancel, |n| progress(n, total)).await?;
-            let dest = self.root.join(&pack.folder);
+            let dest = root.join(&pack.folder);
             let dest_clone = dest.clone();
             tokio::task::spawn_blocking(move || extract(&target, &dest_clone)).await??;
             done += archive.size;
         } else if id == "shape" && archive_needed {
-            mesh::install(&self.root.join(&pack.folder), cancel, &status).await?;
+            mesh::install(&root.join(&pack.folder), cancel, &status).await?;
         }
         for asset in missing {
-            let target = self.root.join("Models").join(&asset.file);
+            let target = root.join("Models").join(&asset.file);
             fs::create_dir_all(target.parent().context("Dossier de modèle manquant")?)?;
             download_asset(&client, asset, &target, cancel, |n| {
                 progress(done + n, total)
@@ -263,13 +272,13 @@ impl Engines {
         }
         let pack = self.packs.get(profile).context("Profil d’image inconnu")?;
         let binary = self
-            .binary(settings, pack)
+            .binary(settings, profile, pack)
             .context("Installe le moteur d’image dans les réglages")?;
         let weights = pack
             .files
             .iter()
             .map(|file| {
-                self.model(settings, file)
+                self.model(settings, profile, file)
                     .context("Installe le pack Image local")
             })
             .collect::<Result<Vec<_>>>()?;
@@ -421,10 +430,10 @@ impl Engines {
     ) -> Result<mesh::Generated> {
         let pack = self.packs.get("shape").context("Pack 3D indisponible")?;
         let python = self
-            .binary(settings, pack)
+            .binary(settings, "shape", pack)
             .context("Installe Shap-E dans Réglages → Modèles locaux")?;
         let root = self
-            .model_folder(settings, pack)
+            .model_folder(settings, "shape", pack)
             .context("Les fichiers Shap-E doivent être installés dans le même dossier")?;
         let _render = tokio::select! {
             guard = self.render.lock() => guard,
@@ -468,13 +477,13 @@ impl Engines {
     ) -> Result<VoiceEndpoint> {
         let pack = &self.packs["voice"];
         let binary = self
-            .binary(settings, pack)
+            .binary(settings, "voice", pack)
             .context("Installe le moteur vocal LFM3")?;
         let model = self
-            .model(settings, &pack.files[0])
+            .model(settings, "voice", &pack.files[0])
             .context("Installe le pack voix LFM3")?;
         let projector = self
-            .model(settings, &pack.files[1])
+            .model(settings, "voice", &pack.files[1])
             .context("Composant audio LFM3 absent")?;
         {
             let mut image = self.image.lock().await;

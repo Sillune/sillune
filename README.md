@@ -7,7 +7,7 @@ Sillune est un assistant IA Windows. Le noyau, l’interface Leptos et le SDK de
 1. Extraire l’archive Windows x64 et ouvrir **Sillune.exe**. L’application utilise le runtime WebView2 de Windows.
 2. Dans **Réglages → Modèles**, choisir un fournisseur et renseigner sa clé. **API compatible ou locale** accepte un serveur compatible OpenAI, par exemple Ollama.
 3. Dans **Réglages → Général**, choisir le dossier de travail et le profil d’autorisation.
-4. Dans **Réglages → Modèles → Modèles locaux**, cliquer sur **Installer** pour chaque pack souhaité. Le code source et l’archive Windows sont livrés sans modèles. Le panneau affiche la taille, l’origine, la licence et l’empreinte des fichiers.
+4. Dans **Réglages → Modèles → Modèles locaux**, cliquer sur **Installer le pack** et choisir un dossier sur le disque souhaité. Sillune y crée un sous-dossier par pack et mémorise son emplacement. Le panneau affiche le chemin enregistré, la taille, l’origine, la licence et l’empreinte des fichiers. Les poids se téléchargent à la demande.
 
 Le **Chat** recherche, lit et livre des fichiers à prévisualiser. Le bouton **Web** et les demandes explicites de recherche déclenchent une recherche avant la réponse du modèle. En cas d’échec du fournisseur IA, Sillune affiche les sources qu’il a récupérées. Pour une prévision à court terme avec une ville, Sillune interroge Open-Meteo. **Agent** ajoute les actions de fichiers, le terminal et les connecteurs. Une demande explicite de création d’un fichier vide sur le Bureau utilise directement l’outil de fichiers, avec le profil de permissions sélectionné.
 

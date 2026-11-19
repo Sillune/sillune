@@ -460,7 +460,7 @@ impl App {
                 data["elapsed"].as_i64().unwrap_or(0) as i32,
                 data["value"].as_i64().unwrap_or(0) as i32
             )?)),
-            "download" => self.download(arg(&data, "pack")?),
+            "download" => self.download(arg(&data, "pack")?, data["folder"].as_str()),
             _ => bail!("Opération Sillune inconnue"),
         }
     }
@@ -576,7 +576,7 @@ impl App {
         Ok(view)
     }
 
-    fn download(self: &Arc<Self>, pack: &str) -> Result<Value> {
+    fn download(self: &Arc<Self>, pack: &str, folder: Option<&str>) -> Result<Value> {
         if !matches!(
             pack,
             "voice" | "image" | "quality" | "zimage" | "shape" | "trellis"
@@ -584,7 +584,20 @@ impl App {
             bail!("Pack inconnu");
         }
         let app = self.clone();
-        let settings = self.store.settings()?;
+        let mut settings = self.store.settings()?;
+        let destination = if let Some(folder) = folder {
+            let folder = std::path::Path::new(folder);
+            if !folder.is_absolute() || !folder.is_dir() {
+                bail!("Choisis un dossier accessible");
+            }
+            let destination = folder.join("Sillune").join(pack);
+            settings
+                .pack_folders
+                .insert(pack.to_owned(), destination.clone());
+            Some(destination)
+        } else {
+            None
+        };
         let session = format!("pack-{pack}");
         let job = self.job(&session, "download")?;
         let pack = pack.to_owned();
@@ -612,6 +625,13 @@ impl App {
                     |status| job.status("download", status),
                 )
                 .await;
+            let result = result.and_then(|()| {
+                if let Some(destination) = destination {
+                    app.store
+                        .set_kv(&format!("pack-folder/{pack}"), &json!(destination))?;
+                }
+                Ok(())
+            });
             job.modify(|v| {
                 if let Err(error) = result {
                     v.error = error.to_string();
