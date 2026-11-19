@@ -1,3 +1,4 @@
+use crate::locale::tr;
 use leptos::{html, prelude::*, task::spawn_local};
 use wasm_bindgen::prelude::*;
 use wasm_bindgen_futures::JsFuture;
@@ -22,11 +23,11 @@ pub fn MeshView(source: String) -> impl IntoView {
         }
     });
     view! {
-        <canvas class="mesh-canvas" node_ref=canvas tabindex="0" aria-label="Aperçu interactif du maillage 3D"></canvas>
+        <canvas class="mesh-canvas" node_ref=canvas tabindex="0" aria-label={tr("Aperçu interactif du maillage 3D", "Interactive 3D preview")}></canvas>
         <p class="mesh-caption">{move || if error.get() {
-            "L’aperçu 3D est indisponible. Le fichier GLB reste exportable."
+            tr("L’aperçu 3D est indisponible. Le fichier GLB reste exportable.", "The 3D preview is unavailable. You can still export the GLB.")
         } else {
-            "Glisse ou utilise les flèches pour tourner. Molette, + ou − pour zoomer."
+            tr("Glisse ou utilise les flèches pour tourner. Molette, + ou − pour zoomer.", "Drag or use arrow keys to rotate. Scroll, + or − to zoom.")
         }}</p>
     }
 }

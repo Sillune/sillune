@@ -254,6 +254,7 @@ impl App {
                         | "opencode"
                         | "compatible"
                 ) || !matches!(settings.permission.as_str(), "ask" | "safe" | "all")
+                    || !matches!(settings.language.as_str(), "en" | "fr")
                     || !(themes::builtin(&settings.theme)
                         || self.themes()?.contains_key(&settings.theme))
                     || !matches!(settings.mode_navigation.as_str(), "sidebar" | "header")
@@ -694,11 +695,17 @@ impl App {
             voice = Some(self.engines.voice_endpoint(&settings, &job.cancel).await?);
         }
         if let (Some(pcm), Some(endpoint)) = (data["pcm"].as_str(), voice.as_ref()) {
-            job.status("listening", "Transcription française locale");
+            job.status("listening", "Transcription locale");
             if pcm.len() > 1_820_000 {
                 bail!("Enregistrement trop long");
             }
-            request = Engines::transcribe(endpoint, &STANDARD.decode(pcm)?, &job.cancel).await?;
+            request = Engines::transcribe(
+                endpoint,
+                &STANDARD.decode(pcm)?,
+                &settings.language,
+                &job.cancel,
+            )
+            .await?;
             job.event(format!("Voix reconnue · {}", clipped(&request, 250)));
         }
         let attachments = data["attachments"]
@@ -772,9 +779,14 @@ impl App {
                 self.store
                     .add_artifact(&format!("sillune-{seed}.png"), "image/png", &png)?,
             );
+            let seed_label = if settings.language == "fr" {
+                "graine"
+            } else {
+                "seed"
+            };
             job.modify(|v| {
                 v.text = format!(
-                    "{} × {} · graine {seed} · {:.1} s · {}",
+                    "{} × {} · {seed_label} {seed} · {:.1} s · {}",
                     width,
                     height,
                     time.as_secs_f64(),
@@ -832,9 +844,14 @@ impl App {
                 "model/gltf-binary",
                 &mesh.bytes,
             )?);
+            let seed_label = if settings.language == "fr" {
+                "graine"
+            } else {
+                "seed"
+            };
             job.modify(|v| {
                 v.text = format!(
-                    "{} triangles · graine {seed} · {:.1} s · {}",
+                    "{} triangles · {seed_label} {seed} · {:.1} s · {}",
                     mesh.triangles,
                     start.elapsed().as_secs_f64(),
                     mesh.device
@@ -891,7 +908,7 @@ impl App {
                 .await?;
                 job.status("working", "Prévisions météo");
                 let forecast = tokio::select! {
-                    result=weather::forecast(city, day)=>result,
+                    result=weather::forecast(city, day, &settings.language)=>result,
                     _=job.cancel.cancelled()=>bail!("Prévisions interrompues"),
                 };
                 match forecast {
@@ -1086,6 +1103,7 @@ impl App {
                     endpoint.context("Le moteur vocal local est absent")?,
                     local.trim_start_matches("local-"),
                     &cleaned,
+                    &settings.language,
                     &job.cancel,
                 )
                 .await?
@@ -1103,6 +1121,11 @@ impl App {
         full: bool,
     ) -> Result<()> {
         let mut prompt = SYSTEM.to_owned();
+        prompt.push_str(if turn.settings.language == "fr" {
+            "\nRéponds dans la langue de la demande. Utilise le français si la demande n’indique pas de langue."
+        } else {
+            "\nReply in the language of the request. Use English if the request does not indicate a language."
+        });
         let mode = turn.mode;
         match mode {
             Mode::Chat => prompt.push_str("\nEn Chat, recherche et lis le contenu autorisé. Les pièces jointes ne modifient pas le dossier de travail."),

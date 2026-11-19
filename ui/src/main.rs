@@ -1,4 +1,6 @@
+use crate::locale::tr;
 mod client;
+mod locale;
 mod mesh_view;
 mod model_picker;
 mod settings;
@@ -11,7 +13,12 @@ use leptos::{prelude::*, task::spawn_local};
 use serde_json::{Value, json};
 
 fn main() {
-    mount_to_body(App);
+    wasm_bindgen_futures::spawn_local(async {
+        if let Ok(snapshot) = invoke("snapshot", json!({})).await {
+            locale::set_language(&field(&snapshot["settings"], "language"));
+        }
+        mount_to_body(App);
+    });
 }
 
 #[component]
@@ -39,7 +46,7 @@ fn App() -> impl IntoView {
             <Show when=move || !ui.notice.get().is_empty()>
                 <div class="toast" role="status">
                     <span>{move || ui.notice.get()}</span>
-                    <button class="iconbutton" on:click=move |_|ui.notice.set(String::new()) aria-label="Fermer le message">"×"</button>
+                    <button class="iconbutton" on:click=move |_|ui.notice.set(String::new()) aria-label={tr("Fermer le message", "Dismiss message")}>"×"</button>
                 </div>
             </Show>
         </div>
@@ -75,14 +82,14 @@ fn Sidebar(ui: Ui) -> impl IntoView {
             <div class="wordmark">
                 <div class="mark"><i></i></div>
                 <span>"Sillune"</span>
-                <button class="iconbutton nav-close" aria-label="Fermer la navigation" on:click=move |_|ui.nav.set(false)>"×"</button>
+                <button class="iconbutton nav-close" aria-label={tr("Fermer la navigation", "Close navigation")} on:click=move |_|ui.nav.set(false)>"×"</button>
             </div>
             <button class="new-button" on:click=move |_|ui.new_chat(&ui.mode.get_untracked())>
-                <span class="nav-icon">"+"</span>"Nouvelle conversation"
+                <span class="nav-icon">"+"</span>{tr("Nouvelle conversation", "New conversation")}
             </button>
             <div class="nav-group">
-                {MODES.iter().enumerate().map(|(index,(mode,label,icon))| {
-                    let (mode,label,icon)=(*mode,*label,*icon);
+                {MODES.iter().enumerate().map(|(index,(mode,_,icon))| {
+                    let (mode,label,icon)=(*mode,mode_label(mode),*icon);
                     view! {
                         <button class="nav-row" hidden=move || { !ui.mode_available(mode) ||
                             index>=2 && (ui.setting("mode_navigation")=="header" || !expanded.get()) }
@@ -96,7 +103,7 @@ fn Sidebar(ui: Ui) -> impl IntoView {
                     <button class="nav-row more-modes" aria-expanded=move ||expanded.get().to_string()
                         on:click=move |_|expanded.update(|value|*value=!*value)>
                         <span class="nav-icon" aria-hidden="true"><span class="chevron"></span></span>
-                        {move || if expanded.get() {"Réduire les modes"} else {"Autres modes"}}
+                        {move || if expanded.get() {tr("Réduire les modes", "Fewer modes")} else {tr("Autres modes", "More modes")}}
                     </button>
                 </Show>
             </div>
@@ -105,7 +112,7 @@ fn Sidebar(ui: Ui) -> impl IntoView {
                     <span class="nav-icon">"▤"</span>"Prompt"
                 </button>
                 <button class="nav-row" class:selected=move || ui.panel.get()=="settings" on:click=move |_|ui.settings("general")>
-                    <span class="nav-icon">"⚙"</span>"Réglages"
+                    <span class="nav-icon">"⚙"</span>{tr("Réglages", "Settings")}
                 </button>
             </div>
             <For each={move || ui.snapshot.with(|s|list(s,"plugins")).into_iter()
@@ -128,9 +135,9 @@ fn Sidebar(ui: Ui) -> impl IntoView {
                         let read_id=id.clone();
                         let preview_title=title.clone();
                         let delete=move |_| {
-                            if ui.active(){ui.tell("Arrête d’abord le tour en cours.");return;}
+                            if ui.active(){ui.tell(tr("Arrête d’abord le tour en cours.", "Stop the current turn first."));return;}
                             let id=id.clone();
-                            let confirmed=web_sys::window().and_then(|w|w.confirm_with_message("Supprimer cette conversation et ses pièces jointes ?").ok()).unwrap_or(false);
+                            let confirmed=web_sys::window().and_then(|w|w.confirm_with_message(tr("Supprimer cette conversation et ses pièces jointes ?", "Delete this conversation and its attachments?")).ok()).unwrap_or(false);
                             if !confirmed{return;}
                             spawn_local(async move {
                                 match invoke("session_delete",json!({"session":id})).await{
@@ -145,7 +152,7 @@ fn Sidebar(ui: Ui) -> impl IntoView {
                         view!{
                             <div class="history-row" class:selected=move || ui.session.get()==read_id>
                                 <button class="history-open" title=preview_title on:click=move |_|ui.open_chat(r.clone())>{title}</button>
-                                <button class="iconbutton history-delete" aria-label="Supprimer la conversation" on:click=delete>"×"</button>
+                                <button class="iconbutton history-delete" aria-label={tr("Supprimer la conversation", "Delete conversation")} on:click=delete>"×"</button>
                             </div>
                         }
                     }}/>
@@ -154,7 +161,7 @@ fn Sidebar(ui: Ui) -> impl IntoView {
                 <span class="workspace-icon">"▱"</span>
                 <span>{move || {
                     let path=ui.setting("workspace");
-                    if path.is_empty(){"Choisir un dossier".into()}else{path.trim_end_matches(['\\','/']).rsplit(['\\','/']).next().unwrap_or(&path).to_owned()}
+                    if path.is_empty(){tr("Choisir un dossier", "Choose a folder").into()}else{path.trim_end_matches(['\\','/']).rsplit(['\\','/']).next().unwrap_or(&path).to_owned()}
                 }}</span><span class="tail">"›"</span>
             </button>
         </aside>
@@ -165,22 +172,22 @@ fn Sidebar(ui: Ui) -> impl IntoView {
 fn Header(ui: Ui, now: RwSignal<f64>) -> impl IntoView {
     view! {
         <header class="header">
-            <button class="iconbutton nav-toggle" aria-label="Ouvrir la navigation" on:click=move |_|ui.nav.update(|v|*v=!*v)>"☰"</button>
+            <button class="iconbutton nav-toggle" aria-label={tr("Ouvrir la navigation", "Open navigation")} on:click=move |_|ui.nav.update(|v|*v=!*v)>"☰"</button>
             <Show when=move ||ui.panel.get()=="conversation" && ui.setting("mode_navigation")=="header"
                   fallback=move ||view!{<div class="header-name">{move || match ui.panel.get().as_str() {
-                "settings"=>"Réglages".to_owned(),
+                "settings"=>tr("Réglages", "Settings").to_owned(),
                 "prompts"=>"Prompt".to_owned(),
                 "conversation"=>mode_label(&ui.mode.get()).to_owned(),
                 id=>ui.snapshot.with(|s|list(s,"plugins").iter().find(|p|p["id"]==id).map(|p|field(p,"title")).unwrap_or_default()),
             }}</div>}>
                 <label class="mode-picker">
                     <span>"Mode"</span>
-                    <span class="select-chevron"><select aria-label="Sélecteur de mode" prop:value=move ||ui.mode.get()
+                    <span class="select-chevron"><select aria-label={tr("Sélecteur de mode", "Mode selector")} prop:value=move ||ui.mode.get()
                       on:change=move |ev| {
                         let chosen = event_target_value(&ev);
                         if !ui.active() { ui.select_mode(&chosen); }
                       } disabled=move ||ui.active()>
-                        {MODES.iter().map(|(mode,label,_)|view!{<option hidden=move ||!ui.mode_available(mode) value=*mode>{*label}</option>}).collect_view()}
+                        {MODES.iter().map(|(mode,_,_)|view!{<option hidden=move ||!ui.mode_available(mode) value=*mode>{mode_label(mode)}</option>}).collect_view()}
                     </select><span class="chevron" aria-hidden="true"></span></span>
                 </label>
             </Show>
@@ -200,7 +207,7 @@ fn Header(ui: Ui, now: RwSignal<f64>) -> impl IntoView {
                         "3d"=>if ui.mesh_profile.get()=="shape" {"Shap-E · Local"} else {"TRELLIS.2 · Local"}.into(),
                         _=>{
                             let model=ui.selected("model");
-                            if model.is_empty(){"Choisir un modèle".into()}else{model}
+                            if model.is_empty(){tr("Choisir un modèle", "Choose a model").into()}else{model}
                         }
                     }}</span><span class="chevron" aria-hidden="true"></span>
                 </button>
@@ -211,7 +218,7 @@ fn Header(ui: Ui, now: RwSignal<f64>) -> impl IntoView {
                     key={|p: &Value|format!("{}@{}:{}",p["id"],p["version"],p["seconds"])}
                     children={move |p: Value|view!{<Timer title={field(&p,"title")} duration={p["seconds"].as_u64().unwrap_or(600)} now=now/>}}
                 />
-                <button class="iconbutton" title="Réglages" aria-label="Réglages" on:click=move |_|ui.settings("general")>"⚙"</button>
+                <button class="iconbutton" title={tr("Réglages", "Settings")} aria-label={tr("Réglages", "Settings")} on:click=move |_|ui.settings("general")>"⚙"</button>
             </div>
         </header>
     }
@@ -241,11 +248,11 @@ fn Timer(title: String, duration: u64, now: RwSignal<f64>) -> impl IntoView {
     };
     view! {
         <div class="timer" title=title>
-            <button class="timer-toggle" on:click=toggle aria-label={move || if end.get().is_some() && remaining()>0{"Mettre le minuteur en pause"}else{"Démarrer le minuteur"}}>
+            <button class="timer-toggle" on:click=toggle aria-label={move || if end.get().is_some() && remaining()>0{tr("Mettre le minuteur en pause", "Pause timer")}else{tr("Démarrer le minuteur", "Start timer")}}>
                 <span>{move || if end.get().is_some() && remaining()>0{"Ⅱ"}else{"▷"}}</span>
                 <strong>{move || format!("{:02}:{:02}",remaining()/60,remaining()%60)}</strong>
             </button>
-            <button class="iconbutton" aria-label="Réinitialiser le minuteur" on:click=move |_|{end.set(None);bank.set(duration);}>"↺"</button>
+            <button class="iconbutton" aria-label={tr("Réinitialiser le minuteur", "Reset timer")} on:click=move |_|{end.set(None);bank.set(duration);}>"↺"</button>
         </div>
     }
 }
@@ -262,7 +269,7 @@ fn Conversation(ui: Ui) -> impl IntoView {
                     <Show when=move || ui.mode.get()=="bot" && ui.voice_ready.get() && !ui.active()>
                         <button class="button compact voice-replay" on:click=move |_| {
                             if ui.playing.get_untracked() { client::stop_voice(); } else { ui.replay(); }
-                        }>{move || if ui.playing.get() {"■ Arrêter la voix"} else {"↻ Réécouter la dernière réponse"}}</button>
+                        }>{move || if ui.playing.get() {tr("■ Arrêter la voix", "■ Stop voice")} else {tr("↻ Réécouter la dernière réponse", "↻ Replay the last reply")}}</button>
                     </Show>
                     <Show when=move || ui.active()>
                         <div class="message assistant stream">
@@ -270,42 +277,42 @@ fn Conversation(ui: Ui) -> impl IntoView {
                             <div class="markdown" on:click=link_click inner_html=move || markdown(&ui.job.with(|j|field(j,"text")))></div>
                             <p class="working" role="status"><span class="pulse"></span>
                                 {move || {
-                                    let value=ui.job.with(|j|field(j,"detail"));
-                                    if value.is_empty(){"Préparation…".into()}else{value}
+                                    let value=ui.job.with(|j|locale::job_text(field(j,"detail")));
+                                    if value.is_empty(){tr("Préparation…", "Getting ready…").into()}else{value}
                                 }}
                             </p>
                         </div>
                     </Show>
                     <Show when=move || ui.job.with(|j|!j["approval"].is_null())>
-                        <div class="approval" role="group" aria-label="Autorisation requise">
-                            <div class="approval-title"><span>"◇"</span>{move || ui.job.with(|j|field(&j["approval"],"label"))}</div>
+                        <div class="approval" role="group" aria-label={tr("Autorisation requise", "Permission required")}>
+                            <div class="approval-title"><span>"◇"</span>{move || ui.job.with(|j|locale::job_text(field(&j["approval"],"label")))}</div>
                             <pre>{move || ui.job.with(|j|field(&j["approval"],"detail"))}</pre>
                             <div class="button-row">
-                                <button class="button" on:click=move |_|ui.approval(false)>"Refuser"</button>
-                                <button class="button primary" on:click=move |_|ui.approval(true)>"Autoriser"</button>
+                                <button class="button" on:click=move |_|ui.approval(false)>{tr("Refuser", "Deny")}</button>
+                                <button class="button primary" on:click=move |_|ui.approval(true)>{tr("Autoriser", "Allow")}</button>
                             </div>
                         </div>
                     </Show>
                     <Show when=move || ui.job.with(|j|j["done"]==true && j["error"].as_str().is_some_and(|s|!s.is_empty()))>
                         <aside class="turn-error" role="alert">
-                            <p>{move ||ui.job.with(|j|field(j,"error"))}</p>
+                            <p>{move ||ui.job.with(|j|locale::job_text(field(j,"error")))}</p>
                             <Show when=move ||ui.job.with(|j|j["credentials"]==true)>
-                                <button class="button compact" on:click=move |_|ui.settings("models")>"Ouvrir les réglages du fournisseur"</button>
+                                <button class="button compact" on:click=move |_|ui.settings("models")>{tr("Ouvrir les réglages du fournisseur", "Open provider settings")}</button>
                             </Show>
                         </aside>
                     </Show>
                     <Show when={move || ui.job.with(|j|!list(j,"events").is_empty() || j["usage"]["input"].as_u64().unwrap_or(0)>0)}>
                         <details class="events">
-                            <summary>"Détail du tour" <span>{move || ui.job.with(|j| {
+                            <summary>{tr("Détail du tour", "Turn details")} <span>{move || ui.job.with(|j| {
                                 let count=j["usage"]["input"].as_u64().unwrap_or(0)+j["usage"]["output"].as_u64().unwrap_or(0);
                                 if count==0 {String::new()} else {format!("{count} tokens")}
                             })}</span></summary>
                             {move || ui.job.with(|j|list(j,"events")).into_iter().map(|event|view!{<p>{event.as_str().unwrap_or_default().to_owned()}</p>}).collect_view()}
-                            <p>{move || ui.job.with(|j|format!("Entrée {} · Sortie {} · Cache {}",j["usage"]["input"].as_u64().unwrap_or(0),j["usage"]["output"].as_u64().unwrap_or(0),j["usage"]["cached"].as_u64().unwrap_or(0)))}</p>
+                            <p>{move || ui.job.with(|j|crate::locale_format!("Entrée {} · Sortie {} · Cache {}", "Input {} · Output {} · Cache {}",j["usage"]["input"].as_u64().unwrap_or(0),j["usage"]["output"].as_u64().unwrap_or(0),j["usage"]["cached"].as_u64().unwrap_or(0)))}</p>
                         </details>
                     </Show>
                     <Show when=move || ui.undo.get() && !ui.active()>
-                        <button class="button undo" on:click=move |_|ui.revert()>"↶  Annuler les modifications du tour"</button>
+                        <button class="button undo" on:click=move |_|ui.revert()>{tr("↶  Annuler les modifications du tour", "↶  Undo changes from this turn")}</button>
                     </Show>
                 </div>
             </div>
@@ -318,60 +325,105 @@ fn Conversation(ui: Ui) -> impl IntoView {
 fn Welcome(ui: Ui) -> impl IntoView {
     let content = move || match ui.mode.get().as_str() {
         "agent" => (
-            "Qu’est-ce qu’on fait ?",
-            "Confie une tâche à Sillune dans ton dossier.",
-            "Examiner ce dossier",
-            "Lis le contenu du dossier et explique son organisation.",
-            "Créer un fichier",
-            "Crée une courte liste de tâches dans notes.md.",
+            tr("Qu’est-ce qu’on fait ?", "What are we working on?"),
+            tr(
+                "Confie une tâche à Sillune dans ton dossier.",
+                "Give Sillune a task in your workspace.",
+            ),
+            tr("Examiner ce dossier", "Review this folder"),
+            tr(
+                "Lis le contenu du dossier et explique son organisation.",
+                "Read the folder and explain how it is organized.",
+            ),
+            tr("Créer un fichier", "Create a file"),
+            tr(
+                "Crée une courte liste de tâches dans notes.md.",
+                "Create a short task list in notes.md.",
+            ),
         ),
         "image" => (
-            "Imagine une image.",
-            "Décris le sujet, le style et la lumière. L’image est générée sur ton PC.",
-            "Paysage de nuit",
+            tr("Imagine une image.", "Imagine a scene."),
+            tr(
+                "Décris le sujet, le style et la lumière. L’image est générée sur ton PC.",
+                "Describe the subject, style and lighting. The image is generated on your PC.",
+            ),
+            tr("Paysage de nuit", "Night landscape"),
             "Wide cinematic photo of a small observatory under a starry sky, purple light",
             "Illustration",
             "Pastel illustration of a moon-shaped bookshop, amber windows, light snow",
         ),
         "bot" => (
-            "Je t’écoute.",
-            "Parle au micro ou écris à Sillune.",
+            tr("Je t’écoute.", "I’m listening."),
+            tr(
+                "Parle au micro ou écris à Sillune.",
+                "Speak into your microphone or type a message.",
+            ),
             "Parler",
             "",
-            "Lire un WAV",
+            tr("Lire un WAV", "Read a WAV file"),
             "",
         ),
         "3d" => (
-            "Crée un objet en 3D.",
-            "Décris un objet ou joins une image. Le résultat s’ouvre en GLB.",
-            "Petit robot",
+            tr("Crée un objet en 3D.", "Create a 3D object."),
+            tr(
+                "Décris un objet ou joins une image. Le résultat s’ouvre en GLB.",
+                "Describe an object or attach an image. The result opens as a GLB.",
+            ),
+            tr("Petit robot", "Small robot"),
             "A small red toy robot with a round head and two blue eyes",
-            "Objet stylisé",
+            tr("Objet stylisé", "Stylized object"),
             "A stylized green cactus in a terracotta pot, simple and colorful",
         ),
         "plugin" => (
-            "Étends ton Sillune.",
-            "Décris un plugin. Sillune l’installe dans ton interface.",
-            "Minuteur",
-            "Crée un minuteur de 10 minutes en haut à droite de l’application.",
-            "Onglet Notes",
-            "Crée un nouvel onglet Notes dans Sillune avec une courte liste de rappels.",
+            tr("Étends ton Sillune.", "Extend Sillune."),
+            tr(
+                "Décris un plugin. Sillune l’installe dans ton interface.",
+                "Describe a plugin and Sillune installs it in your interface.",
+            ),
+            tr("Minuteur", "Timer"),
+            tr(
+                "Crée un minuteur de 10 minutes en haut à droite de l’application.",
+                "Create a 10-minute timer in the top-right corner of the app.",
+            ),
+            tr("Onglet Notes", "Notes tab"),
+            tr(
+                "Crée un nouvel onglet Notes dans Sillune avec une courte liste de rappels.",
+                "Create a new Notes tab in Sillune with a short list of reminders.",
+            ),
         ),
         "themes" => (
-            "Donne une couleur à Sillune.",
-            "Décris une palette. Sillune te propose de l’appliquer et l’ajoute à tes réglages.",
-            "Encre bleue",
-            "Crée un thème sombre Encre bleue, avec un fond bleu de nuit et des accents bleus glacés.",
-            "Papier ivoire",
-            "Crée un thème clair Papier ivoire, avec des couleurs chaudes et des accents verts.",
+            tr("Donne une couleur à Sillune.", "Give Sillune a new look."),
+            tr(
+                "Décris une palette. Sillune te propose de l’appliquer et l’ajoute à tes réglages.",
+                "Describe a palette. Sillune can apply it and add it to your settings.",
+            ),
+            tr("Encre bleue", "Blue Ink"),
+            tr(
+                "Crée un thème sombre Encre bleue, avec un fond bleu de nuit et des accents bleus glacés.",
+                "Create a dark Blue Ink theme with a midnight-blue background and icy-blue accents.",
+            ),
+            tr("Papier ivoire", "Ivory Paper"),
+            tr(
+                "Crée un thème clair Papier ivoire, avec des couleurs chaudes et des accents verts.",
+                "Create a light Ivory Paper theme with warm colors and green accents.",
+            ),
         ),
         _ => (
-            "Par quoi on commence ?",
-            "Écris, explore le web ou ouvre un fichier de travail.",
-            "Rechercher sur le web",
-            "Recherche deux sources et résume les différences entre ",
-            "Créer une page HTML",
-            "Prépare une page HTML autonome qui présente ",
+            tr("Par quoi on commence ?", "Where should we start?"),
+            tr(
+                "Écris, explore le web ou ouvre un fichier de travail.",
+                "Write, explore the web or open a work file.",
+            ),
+            tr("Rechercher sur le web", "Search the web"),
+            tr(
+                "Recherche deux sources et résume les différences entre ",
+                "Find two sources and summarize the differences between ",
+            ),
+            tr("Créer une page HTML", "Create an HTML page"),
+            tr(
+                "Prépare une page HTML autonome qui présente ",
+                "Create a self-contained HTML page introducing ",
+            ),
         ),
     };
     view! {
@@ -415,7 +467,7 @@ fn Mascot(ui: Ui) -> impl IntoView {
             </div>
             <div class="mascot-status">
                 <i></i>
-                {move || match phase().as_str() {"listening"=>"À l’écoute","thinking"|"working"=>"Réfléchit","speaking"=>"Parle","approval"=>"Attend ta décision",_=>"Sillune"}}
+                {move || match phase().as_str() {"listening"=>tr("À l’écoute", "Listening"),"thinking"|"working"=>tr("Réfléchit", "Thinking"),"speaking"=>tr("Parle", "Speaking"),"approval"=>tr("Attend ta décision", "Waiting for your decision"),_=>"Sillune"}}
             </div>
         </div>
     }
@@ -433,46 +485,46 @@ fn Composer(ui: Ui) -> impl IntoView {
                     }).collect_view()}</div>
                 </Show>
                 <textarea rows="2" aria-label="Message"
-                    placeholder=move || match ui.mode.get().as_str() {"image"=>"Décris une image…","3d"=>"Décris ton objet 3D…","plugin"=>"Décris un plugin…","themes"=>"Décris le thème que tu veux…","bot"=>"Parle ou écris à Sillune…",_=>"Écrire à Sillune…"}
+                    placeholder=move || match ui.mode.get().as_str() {"image"=>tr("Décris une image…", "Describe an image…"),"3d"=>tr("Décris ton objet 3D…", "Describe your 3D object…"),"plugin"=>tr("Décris un plugin…", "Describe a plugin…"),"themes"=>tr("Décris le thème que tu veux…", "Describe your theme…"),"bot"=>tr("Parle ou écris à Sillune…", "Talk to Sillune or type a message…"),_=>tr("Écrire à Sillune…", "Message Sillune…")}
                     prop:value=move || ui.composer.get()
                     on:input=move |ev|ui.composer.set(event_target_value(&ev))
                     on:keydown=move |ev:web_sys::KeyboardEvent|if ev.key()=="Enter" && !ev.shift_key() && !ev.is_composing(){ev.prevent_default();ui.send(None);}>
                 </textarea>
                 <div class="composer-tools">
                     <Show when=move || ui.mode.get()!="image" && (ui.mode.get()!="3d" || ui.mesh_profile.get()=="trellis")>
-                        <button class="iconbutton" aria-label=move || if ui.mode.get()=="3d" {"Joindre une image PNG ou JPEG"} else {"Joindre un fichier"}
-                            title=move || if ui.mode.get()=="3d" {"Joindre une image PNG ou JPEG"} else {"Joindre un fichier"}
+                        <button class="iconbutton" aria-label=move || if ui.mode.get()=="3d" {tr("Joindre une image PNG ou JPEG", "Attach a PNG or JPEG image")} else {tr("Joindre un fichier", "Attach a file")}
+                            title=move || if ui.mode.get()=="3d" {tr("Joindre une image PNG ou JPEG", "Attach a PNG or JPEG image")} else {tr("Joindre un fichier", "Attach a file")}
                             on:click=move |_|ui.attach()>"＋"</button>
                     </Show>
                     <Show when=move || matches!(ui.mode.get().as_str(),"chat"|"agent"|"bot")>
                         <button class="picker-button web-toggle" class:current=move ||ui.web.get()
-                            aria-pressed=move ||ui.web.get().to_string() title="Lancer une recherche web pour ce message"
+                            aria-pressed=move ||ui.web.get().to_string() title={tr("Lancer une recherche web pour ce message", "Search the web for this message")}
                             on:click=move |_|ui.web.update(|enabled|*enabled=!*enabled)>"◎ Web"</button>
                     </Show>
                     <Show when=move || matches!(ui.mode.get().as_str(),"agent"|"bot"|"plugin"|"themes")>
-                        <select class="flat-select" aria-label="Niveau de permission" prop:value=move || ui.setting("permission") on:change=move |ev|{
+                        <select class="flat-select" aria-label={tr("Niveau de permission", "Permission level")} prop:value=move || ui.setting("permission") on:change=move |ev|{
                             let mut settings=ui.snapshot.with_untracked(|s|s["settings"].clone());
                             settings["permission"]=json!(event_target_value(&ev));
                             client::commit_settings(ui,settings);
                         }>
-                            <option value="ask">"Toujours demander"</option>
-                            <option value="safe">"Faible risque"</option>
-                            <option value="all">"Tout approuver"</option>
+                            <option value="ask">{tr("Toujours demander", "Always ask")}</option>
+                            <option value="safe">{tr("Faible risque", "Low-risk actions")}</option>
+                            <option value="all">{tr("Tout approuver", "Allow everything")}</option>
                         </select>
                     </Show>
                     <Show when=move || ui.mode.get()=="image">
-                        <span class="select-chevron"><select class="flat-select" aria-label="Modèle d’image" prop:value=move ||ui.image_profile.get() on:change=move |ev|ui.image_profile.set(event_target_value(&ev))>
-                            <option value="image">"Rapide · SDXS"</option><option value="quality">"Qualité · FLUX.2"</option>
+                        <span class="select-chevron"><select class="flat-select" aria-label={tr("Modèle d’image", "Image model")} prop:value=move ||ui.image_profile.get() on:change=move |ev|ui.image_profile.set(event_target_value(&ev))>
+                            <option value="image">{tr("Rapide · SDXS", "Fast · SDXS")}</option><option value="quality">{tr("Qualité · FLUX.2", "Quality · FLUX.2")}</option>
                             <option value="zimage">"Z-Image Turbo"</option>
                         </select><span class="chevron" aria-hidden="true"></span></span>
-                        <select class="flat-select" aria-label="Format de l’image" prop:value=move ||ui.size.get() on:change=move |ev|ui.size.set(event_target_value(&ev))>
-                            <option value="square">"Carré"</option><option value="wide">"Paysage"</option><option value="tall">"Portrait"</option>
-                            <option value="medium_square">"Carré 768 px"</option>
-                            <option value="large" disabled=move ||ui.image_profile.get()=="image">"Carré 1024 px"</option>
+                        <select class="flat-select" aria-label={tr("Format de l’image", "Image size")} prop:value=move ||ui.size.get() on:change=move |ev|ui.size.set(event_target_value(&ev))>
+                            <option value="square">{tr("Carré", "Square")}</option><option value="wide">{tr("Paysage", "Landscape")}</option><option value="tall">"Portrait"</option>
+                            <option value="medium_square">{tr("Carré 768 px", "Square 768 px")}</option>
+                            <option value="large" disabled=move ||ui.image_profile.get()=="image">{tr("Carré 1024 px", "Square 1024 px")}</option>
                         </select>
                     </Show>
                     <Show when=move || ui.mode.get()=="3d">
-                        <span class="select-chevron"><select class="flat-select" aria-label="Modèle 3D" prop:value=move ||ui.mesh_profile.get()
+                        <span class="select-chevron"><select class="flat-select" aria-label={tr("Modèle 3D", "3D model")} prop:value=move ||ui.mesh_profile.get()
                             on:change=move |ev| {
                                 let model=event_target_value(&ev);
                                 if model=="shape" {ui.attachments.set(Vec::new());}
@@ -483,15 +535,15 @@ fn Composer(ui: Ui) -> impl IntoView {
                         </select><span class="chevron" aria-hidden="true"></span></span>
                     </Show>
                     <Show when=move || matches!(ui.mode.get().as_str(),"image"|"3d")>
-                        <input class="seed" type="number" min="0" placeholder="Graine" aria-label="Graine" prop:value=move || ui.seed.get() on:input=move |ev|ui.seed.set(event_target_value(&ev))/>
-                        <button class="button compact" on:click=move |_|ui.stop_render()>"Arrêter le modèle"</button>
+                        <input class="seed" type="number" min="0" placeholder={tr("Graine", "Seed")} aria-label={tr("Graine", "Seed")} prop:value=move || ui.seed.get() on:input=move |ev|ui.seed.set(event_target_value(&ev))/>
+                        <button class="button compact" on:click=move |_|ui.stop_render()>{tr("Arrêter le modèle", "Stop model")}</button>
                     </Show>
                     <Show when=move || ui.mode.get()=="bot">
                         <button class="button mic-button" class:listening=move || ui.mic.get() on:click=move |_|ui.microphone()>
-                            {move || if ui.mic.get(){"■ Envoyer ma voix"}else{"◉ Micro"}}
+                            {move || if ui.mic.get(){tr("■ Envoyer ma voix", "■ Send voice message")}else{tr("◉ Micro", "◉ Microphone")}}
                         </button>
-                        <button class="iconbutton" aria-label="Lire un fichier WAV" title="Lire un fichier WAV" on:click=move |_|ui.import_audio()>"♫"</button>
-                        <button class="iconbutton" aria-label="Couper ou rétablir la voix" on:click=move |_|{
+                        <button class="iconbutton" aria-label={tr("Lire un fichier WAV", "Read a WAV file")} title={tr("Lire un fichier WAV", "Read a WAV file")} on:click=move |_|ui.import_audio()>"♫"</button>
+                        <button class="iconbutton" aria-label={tr("Couper ou rétablir la voix", "Toggle voice playback")} on:click=move |_|{
                             ui.quiet.update(|v|*v=!*v);if ui.quiet.get_untracked(){client::stop_voice();}
                         }>{move || if ui.quiet.get(){"◌"}else{"◖))"}}</button>
                     </Show>
@@ -500,11 +552,11 @@ fn Composer(ui: Ui) -> impl IntoView {
                         <model_picker::ModelPicker ui=ui/>
                     </Show>
                     <Show when=move || ui.active() || ui.playing.get() fallback=move || view!{
-                        <button class="send" aria-label="Envoyer" disabled=move || ui.composer.with(|s|s.trim().is_empty())
+                        <button class="send" aria-label={tr("Envoyer", "Send")} disabled=move || ui.composer.with(|s|s.trim().is_empty())
                             && !(ui.mode.get()=="3d" && ui.mesh_profile.get()=="trellis" && !ui.attachments.with(Vec::is_empty))
                             on:click=move |_|ui.send(None)>"↑"</button>
                     }>
-                        <button class="send stop" aria-label="Arrêter" on:click=move |_|ui.cancel()>"■"</button>
+                        <button class="send stop" aria-label={tr("Arrêter", "Stop")} on:click=move |_|ui.cancel()>"■"</button>
                     </Show>
                 </div>
             </div>
@@ -533,7 +585,7 @@ fn MessageRow(ui: Ui, message: Value) -> impl IntoView {
                                 let _=wasm_bindgen_futures::JsFuture::from(client::play_voice(&field(&value,"preview"))).await;
                             }
                         });
-                    }>"▶ Réécouter la réponse"</button>}.into_any()
+                    }>{tr("▶ Réécouter la réponse", "▶ Replay the reply")}</button>}.into_any()
                 } else { view!{<Attachment ui=ui file=file/>}.into_any() }
             }).collect_view()}</div>
         </article>
@@ -558,12 +610,12 @@ fn Attachment(ui: Ui, file: Value) -> impl IntoView {
     view! {
         <div class="attachment">
             <Show when=move || !bitmap.get().is_empty()>
-                <img class="attachment-image" src=move || bitmap.get() alt="Image générée"/>
+                <img class="attachment-image" src=move || bitmap.get() alt={tr("Image générée", "Generated image")}/>
             </Show>
             <div class="attachment-bar">
                 <span class="file-symbol">"▧"</span><span class="filename">{name}</span>
-                <button class="button compact" on:click=move |_|ui.show_artifact(show.clone())>"Aperçu"</button>
-                <button class="iconbutton" aria-label="Enregistrer sous" title="Enregistrer sous" on:click=move |_|ui.export(export.clone())>"↓"</button>
+                <button class="button compact" on:click=move |_|ui.show_artifact(show.clone())>{tr("Aperçu", "Preview")}</button>
+                <button class="iconbutton" aria-label={tr("Enregistrer sous", "Save as")} title={tr("Enregistrer sous", "Save as")} on:click=move |_|ui.export(export.clone())>"↓"</button>
             </div>
         </div>
     }
@@ -574,23 +626,23 @@ fn Preview(ui: Ui) -> impl IntoView {
     view! {
         <Show when=move || ui.preview.with(|v|!v.is_null())>
             <div class="modal-shade" on:click=move |_|ui.preview.set(Value::Null)>
-                <section class="modal" role="dialog" aria-modal="true" aria-label="Aperçu de la pièce jointe" on:click=move |ev|ev.stop_propagation()>
+                <section class="modal" role="dialog" aria-modal="true" aria-label={tr("Aperçu de la pièce jointe", "Attachment preview")} on:click=move |ev|ev.stop_propagation()>
                     <div class="modal-head">
                         <h2>{move || ui.preview.with(|v|field(&v["file"],"name"))}</h2>
-                        <button class="button" on:click=move |_|ui.export(ui.preview.with_untracked(|v|field(&v["file"],"id")))>"Enregistrer sous"</button>
-                        <button class="iconbutton" aria-label="Fermer l’aperçu" on:click=move |_|ui.preview.set(Value::Null)>"×"</button>
+                        <button class="button" on:click=move |_|ui.export(ui.preview.with_untracked(|v|field(&v["file"],"id")))>{tr("Enregistrer sous", "Save as")}</button>
+                        <button class="iconbutton" aria-label={tr("Fermer l’aperçu", "Close preview")} on:click=move |_|ui.preview.set(Value::Null)>"×"</button>
                     </div>
                     <div class="modal-body">
                         {move || ui.preview.with(|value| {
                             let media=field(&value["file"],"media");let source=field(value,"preview");
                             match media.as_str() {
-                                "text/html"=>view!{<iframe title="Aperçu HTML isolé" sandbox="" srcdoc=safe_document(&source)></iframe>}.into_any(),
+                                "text/html"=>view!{<iframe title={tr("Aperçu HTML isolé", "Isolated HTML preview")} sandbox="" srcdoc=safe_document(&source)></iframe>}.into_any(),
                                 "model/gltf-binary"=>view!{<mesh_view::MeshView source=source/>}.into_any(),
-                                x if x.starts_with("image/")=>view!{<img class="preview-img" src=source alt="Aperçu de l’image"/>}.into_any(),
+                                x if x.starts_with("image/")=>view!{<img class="preview-img" src=source alt={tr("Aperçu de l’image", "Image preview")}/>}.into_any(),
                                 x if x.starts_with("audio/")=>view!{<audio controls src=source></audio>}.into_any(),
                                 x if x.starts_with("video/")=>view!{<video controls src=source></video>}.into_any(),
                                 x if x.starts_with("text/")=>view!{<pre>{source}</pre>}.into_any(),
-                                _=>view!{<p>"Enregistre ce fichier pour l’ouvrir dans une application compatible."</p>}.into_any(),
+                                _=>view!{<p>{tr("Enregistre ce fichier pour l’ouvrir dans une application compatible.", "Save this file to open it in a compatible app.")}</p>}.into_any(),
                             }
                         })}
                     </div>
@@ -609,16 +661,16 @@ fn ExtensionPage(ui: Ui) -> impl IntoView {
             {move || {
                 let id=ui.panel.get();
                 let entry=ui.snapshot.with(|s|list(s,"plugins").into_iter().find(|p|p["id"]==id && p["active"]==true));
-                let Some(entry)=entry else{return view!{<p>"Extension inactive."</p>}.into_any();};
+                let Some(entry)=entry else{return view!{<p>{tr("Extension inactive.", "Extension inactive.")}</p>}.into_any();};
                 let body=field(&entry,"html");
                 let kind=field(&entry,"kind");
                 view! {
                     <h1>{field(&entry,"title")}</h1>
                     <p class="extension-text">{field(&entry,"text")}</p>
-                    {if body.is_empty(){().into_any()}else{view!{<iframe class="extension-frame" sandbox="" title="Contenu du plugin" srcdoc=safe_document(&body)></iframe>}.into_any()}}
+                    {if body.is_empty(){().into_any()}else{view!{<iframe class="extension-frame" sandbox="" title={tr("Contenu du plugin", "Plugin content")} srcdoc=safe_document(&body)></iframe>}.into_any()}}
                     {if kind=="wasm" {
                         view!{<div class="wasm-controls">
-                            <label>"Valeur"<input type="number" prop:value=move ||value.get() on:input=move |ev|value.set(event_target_value(&ev))/></label>
+                            <label>{tr("Valeur", "Value")}<input type="number" prop:value=move ||value.get() on:input=move |ev|value.set(event_target_value(&ev))/></label>
                             <button class="button primary" on:click=move |_|{
                                 let id=id.clone();
                                 spawn_local(async move{
@@ -626,7 +678,7 @@ fn ExtensionPage(ui: Ui) -> impl IntoView {
                                         Ok(v)=>result.set(v.to_string()),Err(e)=>ui.tell(e),
                                     }
                                 });
-                            }>"Exécuter"</button>
+                            }>{tr("Exécuter", "Run")}</button>
                             <output>{move ||result.get()}</output>
                         </div>}.into_any()
                     }else{().into_any()}}
@@ -666,17 +718,17 @@ fn PromptPage(ui: Ui) -> impl IntoView {
         <section class="page">
             <div class="section-head">
                 <h1>"Prompt"</h1>
-                <button class="button primary" on:click=move |_|{index.set(None);name.set(String::new());text.set(String::new());show.set(true);}>"＋ Ajouter un prompt"</button>
+                <button class="button primary" on:click=move |_|{index.set(None);name.set(String::new());text.set(String::new());show.set(true);}>{tr("＋ Ajouter un prompt", "＋ Add a prompt")}</button>
             </div>
             <Show when=move ||show.get()>
                 <div class="form-card">
-                    <label>"Nom"<input prop:value=move ||name.get() on:input=move |ev|name.set(event_target_value(&ev)) placeholder="Nom du prompt"/></label>
-                    <label>"Texte"<textarea rows="7" prop:value=move ||text.get() on:input=move |ev|text.set(event_target_value(&ev)) placeholder="Écris le prompt…"></textarea></label>
-                    <div class="button-row"><button class="button" on:click=move |_|show.set(false)>"Annuler"</button><button class="button primary" on:click=submit>"Enregistrer"</button></div>
+                    <label>{tr("Nom", "Name")}<input prop:value=move ||name.get() on:input=move |ev|name.set(event_target_value(&ev)) placeholder={tr("Nom du prompt", "Prompt name")}/></label>
+                    <label>{tr("Texte", "Text")}<textarea rows="7" prop:value=move ||text.get() on:input=move |ev|text.set(event_target_value(&ev)) placeholder={tr("Écris le prompt…", "Write your prompt…")}></textarea></label>
+                    <div class="button-row"><button class="button" on:click=move |_|show.set(false)>{tr("Annuler", "Cancel")}</button><button class="button primary" on:click=submit>{tr("Enregistrer", "Save")}</button></div>
                 </div>
             </Show>
             <Show when=move ||ui.snapshot.with(|s|list(s,"prompts").is_empty()) && !show.get()>
-                <p class="empty-page">"Tes prompts enregistrés apparaîtront ici."</p>
+                <p class="empty-page">{tr("Tes prompts enregistrés apparaîtront ici.", "Your saved prompts will appear here.")}</p>
             </Show>
             {move ||ui.snapshot.with(|s|list(s,"prompts")).into_iter().enumerate().map(|(i,item)|{
                 let item_name=field(&item,"name");
@@ -688,13 +740,13 @@ fn PromptPage(ui: Ui) -> impl IntoView {
                     <article class="form-card prompt-item">
                         <h2>{item_name}</h2><p>{item_text}</p>
                         <div class="button-row">
-                            <button class="button" on:click=move |_|{copy_text(copy.clone());ui.tell("Prompt copié.");}>"Copier"</button>
-                            <button class="button" on:click=move |_|{index.set(Some(i));name.set(edit_name.clone());text.set(edit.clone());show.set(true);}>"Modifier"</button>
+                            <button class="button" on:click=move |_|{copy_text(copy.clone());ui.tell(tr("Prompt copié.", "Prompt copied."));}>{tr("Copier", "Copy")}</button>
+                            <button class="button" on:click=move |_|{index.set(Some(i));name.set(edit_name.clone());text.set(edit.clone());show.set(true);}>{tr("Modifier", "Edit")}</button>
                             <button class="button danger" on:click=move |_|{
                                 let mut rows=ui.snapshot.with_untracked(|s|list(s,"prompts"));
                                 if i<rows.len(){rows.remove(i);}
                                 spawn_local(async move {match invoke("prompts_save",json!({"prompts":rows})).await{Ok(v)=>ui.snapshot.set(v),Err(e)=>ui.tell(e)}});
-                            }>"Supprimer"</button>
+                            }>{tr("Supprimer", "Delete")}</button>
                         </div>
                     </article>
                 }

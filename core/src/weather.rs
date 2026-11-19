@@ -51,11 +51,11 @@ pub fn location(text: &str) -> Option<(&str, usize)> {
     Some((target, day))
 }
 
-pub async fn forecast(city: &str, day: usize) -> Result<String> {
+pub async fn forecast(city: &str, day: usize, language: &str) -> Result<String> {
     let client = provider::client()?;
     let places: Value = client
         .get("https://geocoding-api.open-meteo.com/v1/search")
-        .query(&[("name", city), ("count", "5"), ("language", "fr")])
+        .query(&[("name", city), ("count", "5"), ("language", language)])
         .timeout(Duration::from_secs(10))
         .send()
         .await?
@@ -123,20 +123,28 @@ pub async fn forecast(city: &str, day: usize) -> Result<String> {
         .as_u64()
         .context("Probabilité de précipitations absente")?;
     let conditions = match result["daily"]["weather_code"][day].as_u64() {
-        Some(0) => "ciel dégagé",
-        Some(1..=3) => "nuages",
-        Some(45 | 48) => "brouillard",
-        Some(51..=67 | 80..=82) => "pluie ou averses",
-        Some(71..=77 | 85 | 86) => "neige",
-        Some(95..=99) => "orage",
-        Some(_) => "conditions variables",
+        Some(0) => ("ciel dégagé", "clear skies"),
+        Some(1..=3) => ("nuages", "clouds"),
+        Some(45 | 48) => ("brouillard", "fog"),
+        Some(51..=67 | 80..=82) => ("pluie ou averses", "rain or showers"),
+        Some(71..=77 | 85 | 86) => ("neige", "snow"),
+        Some(95..=99) => ("orage", "thunderstorms"),
+        Some(_) => ("conditions variables", "mixed conditions"),
         None => bail!("Conditions météo absentes"),
     };
-    Ok(format!(
-        "**{} ({}) · {date}**\n\nPrévision de {conditions}, avec des températures de {min:.0} à {max:.0} °C. La probabilité maximale de précipitations sur la journée est de **{precipitation} %**.\n\n[Source Open-Meteo]({url})",
-        place["name"].as_str().unwrap_or(city),
-        place["country"].as_str().unwrap_or("lieu sélectionné")
-    ))
+    let name = place["name"].as_str().unwrap_or(city);
+    let country = place["country"].as_str().unwrap_or_default();
+    let (french, english) = conditions;
+    let summary = if language == "fr" {
+        format!(
+            "Prévision de {french}, avec des températures de {min:.0} à {max:.0} °C. La probabilité maximale de précipitations est de **{precipitation} %**.\n\n[Source Open-Meteo]({url})"
+        )
+    } else {
+        format!(
+            "Expect {english}, with temperatures from {min:.0} to {max:.0} °C. The highest chance of precipitation is **{precipitation}%**.\n\n[Open-Meteo forecast]({url})"
+        )
+    };
+    Ok(format!("**{name} ({country}) · {date}**\n\n{summary}"))
 }
 
 #[cfg(test)]

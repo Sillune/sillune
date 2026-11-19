@@ -1,3 +1,4 @@
+use crate::locale::tr;
 use leptos::{prelude::*, task::spawn_local};
 use serde_json::{Value, json};
 use wasm_bindgen::{
@@ -43,9 +44,13 @@ pub async fn native(command: &str, payload: Value) -> Result<Value, String> {
     let value = JsFuture::from(native_invoke(command, &payload.to_string()))
         .await
         .map_err(|error| {
-            error
-                .as_string()
-                .unwrap_or_else(|| "Communication avec Sillune interrompue".into())
+            error.as_string().unwrap_or_else(|| {
+                tr(
+                    "Communication avec Sillune interrompue",
+                    "Connection to Sillune interrupted",
+                )
+                .into()
+            })
         })?;
     serde_json::from_str(value.as_string().as_deref().unwrap_or("null")).map_err(|e| e.to_string())
 }
@@ -90,7 +95,13 @@ pub fn mode_label(mode: &str) -> &'static str {
     MODES
         .iter()
         .find(|m| m.0 == mode)
-        .map(|m| m.1)
+        .map(|m| {
+            if m.0 == "themes" {
+                tr("Thèmes", "Themes")
+            } else {
+                m.1
+            }
+        })
         .unwrap_or("Chat")
 }
 
@@ -250,9 +261,10 @@ impl Ui {
 
     pub fn new_chat(self, mode: &str) {
         if self.active() {
-            self.tell(
+            self.tell(tr(
                 "Arrête ou termine le tour en cours avant d’ouvrir une nouvelle conversation.",
-            );
+                "Stop or finish the current turn before opening a new conversation.",
+            ));
             return;
         }
         stop_voice();
@@ -273,7 +285,10 @@ impl Ui {
 
     pub fn open_chat(self, row: Value) {
         if self.active() || self.mic.get_untracked() {
-            self.tell("Termine le tour en cours pour changer de conversation.");
+            self.tell(tr(
+                "Termine le tour en cours pour changer de conversation.",
+                "Finish the current turn before switching conversations.",
+            ));
             return;
         }
         self.panel.set("conversation".into());
@@ -334,7 +349,10 @@ impl Ui {
                 .snapshot
                 .with_untracked(|s| s["packs"][&pack]["ready"].as_bool().unwrap_or(false));
             if !ready {
-                self.tell("Installe d’abord le pack local depuis les réglages des modèles.");
+                self.tell(tr(
+                    "Installe d’abord le pack local depuis les réglages des modèles.",
+                    "Install the local pack in model settings first.",
+                ));
                 self.settings("models");
                 return;
             }
@@ -348,7 +366,7 @@ impl Ui {
                 let title = if photo && text.is_empty() {
                     field(&files[0], "name")
                 } else if text.is_empty() {
-                    "Conversation vocale".into()
+                    tr("Conversation vocale", "Voice conversation").into()
                 } else {
                     text.chars().take(58).collect::<String>()
                 };
@@ -383,7 +401,7 @@ impl Ui {
                     self.web.set(false);
                     self.picker.set("");
                     let user = if text.is_empty() && !photo {
-                        "Message vocal".into()
+                        tr("Message vocal", "Voice message").into()
                     } else {
                         text
                     };
@@ -435,7 +453,7 @@ impl Ui {
                                 .iter()
                                 .rev()
                                 .filter_map(Value::as_str)
-                                .find(|event| event.starts_with("Voix · "))
+                                .find(|event| event.starts_with(tr("Voix · ", "Voice · ")))
                             {
                                 self.tell(error);
                             }
@@ -476,7 +494,7 @@ impl Ui {
         let session = self.session.get_untracked();
         spawn_local(async move {
             match invoke("stop_render", json!({"session":session})).await {
-                Ok(_) => self.tell("Modèle arrêté."),
+                Ok(_) => self.tell(tr("Modèle arrêté.", "Model stopped.")),
                 Err(error) => self.tell(error),
             }
         });
@@ -533,7 +551,10 @@ impl Ui {
                     if matches!(file["media"].as_str(), Some("image/png" | "image/jpeg")) {
                         self.attachments.set(vec![file]);
                     } else {
-                        self.tell("Choisis une image PNG ou JPEG.");
+                        self.tell(tr(
+                            "Choisis une image PNG ou JPEG.",
+                            "Choose a PNG or JPEG image.",
+                        ));
                     }
                 }
                 Ok(file) if !file.is_null() => self.attachments.update(|items| {
@@ -559,7 +580,7 @@ impl Ui {
     pub fn export(self, id: String) {
         spawn_local(async move {
             match native("export_file", json!({"id":id})).await {
-                Ok(v) if v == true => self.tell("Fichier enregistré."),
+                Ok(v) if v == true => self.tell(tr("Fichier enregistré.", "File saved.")),
                 Ok(_) => {}
                 Err(e) => self.tell(e),
             }
@@ -586,8 +607,9 @@ impl Ui {
                 Ok(result) => {
                     let restored = list(&result, "restored").len();
                     let conflicts = list(&result, "conflicts");
-                    self.tell(format!(
+                    self.tell(crate::locale_format!(
                         "{restored} fichier(s) restauré(s) · {} conflit(s).",
+                        "{restored} files restored · {} conflicts.",
                         conflicts.len()
                     ));
                     if let Some(file) = conflicts.first().and_then(|c| c.get("file")) {
@@ -663,8 +685,14 @@ pub fn commit_settings(ui: Ui, settings: Value) {
     spawn_local(async move {
         match invoke("settings_save", json!({"settings":settings})).await {
             Ok(result) => {
+                let language_changed =
+                    ui.setting("language") != field(&result["settings"], "language");
                 ui.snapshot.set(result);
-                ui.tell("Réglages enregistrés.");
+                if language_changed && let Some(window) = web_sys::window() {
+                    let _ = window.location().reload();
+                    return;
+                }
+                ui.tell(tr("Réglages enregistrés.", "Settings saved."));
             }
             Err(e) => ui.tell(e),
         }

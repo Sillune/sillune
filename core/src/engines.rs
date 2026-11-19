@@ -591,6 +591,7 @@ impl Engines {
     pub async fn transcribe(
         endpoint: &VoiceEndpoint,
         pcm: &[u8],
+        language: &str,
         cancel: &CancellationToken,
     ) -> Result<String> {
         if pcm.len() > 16_000 * 2 * 41 || pcm.len() < 1600 || pcm.len() % 2 != 0 {
@@ -606,7 +607,7 @@ impl Engines {
             let (mut socket, _) = tokio_tungstenite::connect_async(request).await?;
             socket.send(Message::Text(json!({
                 "type":"session.update","session":{"type":"transcription","audio":{"input":{
-                    "format":{"type":"audio/pcm","rate":16000},"transcription":{"language":"fr"}
+                    "format":{"type":"audio/pcm","rate":16000},"transcription":{"language":language}
                 }}}
             }).to_string().into())).await?;
             for samples in pcm.chunks(16_000) {
@@ -661,11 +662,12 @@ impl Engines {
         endpoint: &VoiceEndpoint,
         voice: &str,
         input: &str,
+        language: &str,
         cancel: &CancellationToken,
     ) -> Result<Vec<u8>> {
         let client = provider::client()?;
         let request = client.post(format!("{}/audio/speech", endpoint.base)).bearer_auth(&endpoint.key)
-            .json(&json!({"model":"sillune-voice","voice":voice,"lang":"fr","input":input.chars().take(700).collect::<String>(),
+            .json(&json!({"model":"sillune-voice","voice":voice,"lang":language,"input":input.chars().take(700).collect::<String>(),
                 "response_format":"wav"}));
         Self::speech_bytes(request, cancel).await
     }

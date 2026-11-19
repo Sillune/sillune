@@ -35,8 +35,8 @@ $package = Join-Path $output 'Sillune'
 New-Item -ItemType Directory -Force -Path $package | Out-Null
 Copy-Item -LiteralPath (Join-Path $project 'target\release\sillune.exe') -Destination (Join-Path $package 'Sillune.exe') -Force
 Copy-Item -LiteralPath (Join-Path $project 'LICENSE') -Destination (Join-Path $package 'LICENSE.txt') -Force
-Copy-Item -LiteralPath (Join-Path $project 'README.md') -Destination (Join-Path $package 'LISEZ-MOI.md') -Force
-$releaseFiles = @('Sillune.exe', 'LICENSE.txt', 'LISEZ-MOI.md')
+Copy-Item -LiteralPath (Join-Path $project 'README.md'),(Join-Path $project 'README.fr.md') -Destination $package -Force
+$releaseFiles = @('Sillune.exe', 'LICENSE.txt', 'README.md', 'README.fr.md')
 $skillCatalog = Get-Content -LiteralPath (Join-Path $project 'skills/catalog.json') -Raw | ConvertFrom-Json
 foreach ($entry in $skillCatalog) {
     $name = $entry.id
