@@ -1,4 +1,6 @@
 mod client;
+mod mesh_view;
+mod model_picker;
 mod settings;
 
 use client::{
@@ -139,16 +141,21 @@ fn Header(ui: Ui, now: RwSignal<f64>) -> impl IntoView {
                 id=>ui.snapshot.with(|s|list(s,"plugins").iter().find(|p|p["id"]==id).map(|p|field(p,"title")).unwrap_or_default()),
             }}</div>
             <Show when=move || ui.panel.get()=="conversation">
-                <button class="model-pill" on:click=move |_|ui.settings("models")>
+                <button class="model-pill" on:click=move |_|{
+                    if matches!(ui.mode.get_untracked().as_str(), "image" | "3d") { ui.settings("models"); }
+                    else { ui.picker.set(if ui.picker.get_untracked()=="models" {""} else {"models"}); }
+                }>
                     <i class="status-dot" class:connected=move || ui.snapshot.with(|s| {
-                        let provider=field(&s["settings"],"provider");
+                        let provider=ui.selected("provider");
                         if ui.mode.get()=="image" {s["packs"][ui.image_profile.get()]["ready"]==true}
-                        else if ui.mode.get()=="bot" {s["packs"]["voice"]["ready"]==true}
-                        else {s["secrets"][provider]==true}
+                        else if ui.mode.get()=="3d" {s["packs"]["shape"]["ready"]==true}
+                        else {s["secrets"][provider]==true || ui.selected("provider")=="compatible"}
                     })></i>
                     <span>{move || match ui.mode.get().as_str() {
-                        "image"=>if ui.image_profile.get()=="quality" {"FLUX.2 · Local".into()}else{"SDXS · Local".into()},"bot"=>"LFM3 · Local".into(),_=>{
-                            let model=ui.setting("model");
+                        "image"=>match ui.image_profile.get().as_str() {"quality"=>"FLUX.2 · Local".into(),"zimage"=>"Z-Image Turbo · Local".into(),_=>"SDXS · Local".into()},
+                        "3d"=>"Shap-E · Local".into(),
+                        _=>{
+                            let model=ui.selected("model");
                             if model.is_empty(){"Choisir un modèle".into()}else{model}
                         }
                     }}</span><small>"⌄"</small>
@@ -277,6 +284,14 @@ fn Welcome(ui: Ui) -> impl IntoView {
             "Lire un WAV",
             "",
         ),
+        "3d" => (
+            "Crée un objet en 3D.",
+            "Décris la forme, les couleurs et les détails. Le résultat s’ouvre en GLB.",
+            "Petit robot",
+            "A small red toy robot with a round head and two blue eyes",
+            "Objet stylisé",
+            "A stylized green cactus in a terracotta pot, simple and colorful",
+        ),
         "plugin" => (
             "Étends ton Sillune.",
             "Décris un plugin. Sillune l’installe dans ton interface.",
@@ -353,13 +368,20 @@ fn Composer(ui: Ui) -> impl IntoView {
                     }).collect_view()}</div>
                 </Show>
                 <textarea rows="2" aria-label="Message"
-                    placeholder=move || match ui.mode.get().as_str() {"image"=>"Décris une image…","plugin"=>"Décris un plugin…","bot"=>"Parle ou écris à Sillune…",_=>"Écrire à Sillune…"}
+                    placeholder=move || match ui.mode.get().as_str() {"image"=>"Décris une image…","3d"=>"Décris ton objet 3D…","plugin"=>"Décris un plugin…","bot"=>"Parle ou écris à Sillune…",_=>"Écrire à Sillune…"}
                     prop:value=move || ui.composer.get()
                     on:input=move |ev|ui.composer.set(event_target_value(&ev))
                     on:keydown=move |ev:web_sys::KeyboardEvent|if ev.key()=="Enter" && !ev.shift_key() && !ev.is_composing(){ev.prevent_default();ui.send(None);}>
                 </textarea>
                 <div class="composer-tools">
-                    <button class="iconbutton" aria-label="Joindre un fichier" on:click=move |_|ui.attach()>"＋"</button>
+                    <Show when=move || !matches!(ui.mode.get().as_str(),"image"|"3d")>
+                        <button class="iconbutton" aria-label="Joindre un fichier" on:click=move |_|ui.attach()>"＋"</button>
+                    </Show>
+                    <Show when=move || matches!(ui.mode.get().as_str(),"chat"|"agent"|"bot")>
+                        <button class="picker-button web-toggle" class:current=move ||ui.web.get()
+                            aria-pressed=move ||ui.web.get().to_string() title="Lancer une recherche web pour ce message"
+                            on:click=move |_|ui.web.update(|enabled|*enabled=!*enabled)>"◎ Web"</button>
+                    </Show>
                     <Show when=move || matches!(ui.mode.get().as_str(),"agent"|"bot"|"plugin")>
                         <select class="flat-select" aria-label="Niveau de permission" prop:value=move || ui.setting("permission") on:change=move |ev|{
                             let mut settings=ui.snapshot.with_untracked(|s|s["settings"].clone());
@@ -374,10 +396,15 @@ fn Composer(ui: Ui) -> impl IntoView {
                     <Show when=move || ui.mode.get()=="image">
                         <select class="flat-select" aria-label="Modèle d’image" prop:value=move ||ui.image_profile.get() on:change=move |ev|ui.image_profile.set(event_target_value(&ev))>
                             <option value="image">"Rapide · SDXS"</option><option value="quality">"Qualité · FLUX.2"</option>
+                            <option value="zimage">"Z-Image Turbo"</option>
                         </select>
-                        <select class="flat-select" aria-label="Format de l’image" on:change=move |ev|ui.size.set(event_target_value(&ev))>
+                        <select class="flat-select" aria-label="Format de l’image" prop:value=move ||ui.size.get() on:change=move |ev|ui.size.set(event_target_value(&ev))>
                             <option value="square">"Carré"</option><option value="wide">"Paysage"</option><option value="tall">"Portrait"</option>
+                            <option value="medium_square">"Carré 768 px"</option>
+                            <option value="large" disabled=move ||ui.image_profile.get()=="image">"Carré 1024 px"</option>
                         </select>
+                    </Show>
+                    <Show when=move || matches!(ui.mode.get().as_str(),"image"|"3d")>
                         <input class="seed" type="number" min="0" placeholder="Graine" aria-label="Graine" prop:value=move || ui.seed.get() on:input=move |ev|ui.seed.set(event_target_value(&ev))/>
                     </Show>
                     <Show when=move || ui.mode.get()=="bot">
@@ -390,6 +417,9 @@ fn Composer(ui: Ui) -> impl IntoView {
                         }>{move || if ui.quiet.get(){"◌"}else{"◖))"}}</button>
                     </Show>
                     <div class="spacer"></div>
+                    <Show when=move || !matches!(ui.mode.get().as_str(),"image"|"3d")>
+                        <model_picker::ModelPicker ui=ui/>
+                    </Show>
                     <Show when=move || ui.active() || ui.playing.get() fallback=move || view!{
                         <button class="send" aria-label="Envoyer" disabled=move || ui.composer.with(|s|s.trim().is_empty()) on:click=move |_|ui.send(None)>"↑"</button>
                     }>
@@ -462,6 +492,7 @@ fn Preview(ui: Ui) -> impl IntoView {
                             let media=field(&value["file"],"media");let source=field(value,"preview");
                             match media.as_str() {
                                 "text/html"=>view!{<iframe title="Aperçu HTML isolé" sandbox="" srcdoc=safe_document(&source)></iframe>}.into_any(),
+                                "model/gltf-binary"=>view!{<mesh_view::MeshView source=source/>}.into_any(),
                                 x if x.starts_with("image/")=>view!{<img class="preview-img" src=source alt="Aperçu de l’image"/>}.into_any(),
                                 x if x.starts_with("audio/")=>view!{<audio controls src=source></audio>}.into_any(),
                                 x if x.starts_with("video/")=>view!{<video controls src=source></video>}.into_any(),

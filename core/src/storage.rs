@@ -20,6 +20,7 @@ pub struct Settings {
     pub memory: bool,
     pub mcp: Vec<McpConfig>,
     pub engines: String,
+    pub voice: String,
 }
 
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
@@ -46,6 +47,7 @@ impl Default for Settings {
             memory: false,
             mcp: Vec::new(),
             engines: String::new(),
+            voice: "local-female".into(),
         }
     }
 }
@@ -56,6 +58,8 @@ pub enum Mode {
     Chat,
     Agent,
     Image,
+    #[serde(rename = "3d")]
+    ThreeD,
     Bot,
     Plugin,
 }
@@ -66,6 +70,7 @@ impl Mode {
             Self::Chat => "chat",
             Self::Agent => "agent",
             Self::Image => "image",
+            Self::ThreeD => "3d",
             Self::Bot => "bot",
             Self::Plugin => "plugin",
         }
@@ -200,6 +205,7 @@ impl Store {
             }
         }
         tx.execute("DELETE FROM recall WHERE session=?1", [id])?;
+        tx.execute("DELETE FROM kv WHERE name=?1", [format!("chat-model/{id}")])?;
         tx.execute("DELETE FROM sessions WHERE id=?1", [id])?;
         tx.commit()?;
         Ok(())

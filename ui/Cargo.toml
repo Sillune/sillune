@@ -13,4 +13,4 @@ serde_json.workspace = true
 serde-wasm-bindgen = "0.6"
 wasm-bindgen = "0.2"
 wasm-bindgen-futures = "0.4"
-web-sys = { version = "0.3", features = ["Clipboard", "Document", "Element", "Event", "EventTarget", "HtmlAudioElement", "HtmlElement", "HtmlInputElement", "HtmlMediaElement", "HtmlTextAreaElement", "KeyboardEvent", "MediaQueryList", "MouseEvent", "Navigator", "ScrollBehavior", "ScrollIntoViewOptions", "Window"] }
+web-sys = { version = "0.3", features = ["Clipboard", "Document", "Element", "Event", "EventTarget", "HtmlAudioElement", "HtmlCanvasElement", "HtmlElement", "HtmlInputElement", "HtmlMediaElement", "HtmlTextAreaElement", "KeyboardEvent", "MediaQueryList", "MouseEvent", "Navigator", "ScrollBehavior", "ScrollIntoViewOptions", "Window"] }

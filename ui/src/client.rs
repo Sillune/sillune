@@ -80,6 +80,7 @@ pub const MODES: &[(&str, &str, &str)] = &[
     ("chat", "Chat", "◌"),
     ("agent", "Agent", "⌘"),
     ("image", "Image", "▧"),
+    ("3d", "3D", "◇"),
     ("bot", "Bot", "◒"),
     ("plugin", "Plugin", "⊞"),
 ];
@@ -112,6 +113,9 @@ pub struct Ui {
     pub size: RwSignal<String>,
     pub seed: RwSignal<String>,
     pub image_profile: RwSignal<String>,
+    pub selection: RwSignal<Value>,
+    pub web: RwSignal<bool>,
+    pub picker: RwSignal<&'static str>,
     pub busy: RwSignal<bool>,
     pub nav: RwSignal<bool>,
 }
@@ -137,6 +141,9 @@ impl Ui {
             size: RwSignal::new("square".into()),
             seed: RwSignal::new(String::new()),
             image_profile: RwSignal::new("image".into()),
+            selection: RwSignal::new(Value::Null),
+            web: RwSignal::new(false),
+            picker: RwSignal::new(""),
             busy: RwSignal::new(false),
             nav: RwSignal::new(false),
         }
@@ -162,6 +169,33 @@ impl Ui {
 
     pub fn setting(self, name: &str) -> String {
         self.snapshot.with(|s| field(&s["settings"], name))
+    }
+
+    pub fn selected(self, name: &str) -> String {
+        let selected = self.selection.with(|value| field(value, name));
+        if selected.is_empty() {
+            self.setting(name)
+        } else {
+            selected
+        }
+    }
+
+    pub fn choose(self, selection: Value) {
+        self.selection.set(selection.clone());
+        let session = self.session.get_untracked();
+        if !session.is_empty() {
+            spawn_local(async move {
+                if let Err(error) = invoke(
+                    "chat_preferences",
+                    json!({"session":session,"provider":selection["provider"],
+                    "model":selection["model"],"effort":selection["effort"]}),
+                )
+                .await
+                {
+                    self.tell(error);
+                }
+            });
+        }
     }
 
     pub fn settings(self, tab: &str) {
@@ -193,6 +227,9 @@ impl Ui {
         self.mode.set(mode.into());
         self.panel.set("conversation".into());
         self.session.set(String::new());
+        self.selection.set(Value::Null);
+        self.web.set(false);
+        self.picker.set("");
         self.composer.set(String::new());
         self.messages.set(Vec::new());
         self.attachments.set(Vec::new());
@@ -208,20 +245,26 @@ impl Ui {
         self.panel.set("conversation".into());
         self.mode.set(field(&row, "mode"));
         self.session.set(field(&row, "id"));
+        self.selection.set(Value::Null);
+        self.web.set(false);
+        self.picker.set("");
         self.job.set(Value::Null);
         self.messages.set(Vec::new());
         self.composer.set(String::new());
         self.attachments.set(Vec::new());
         self.nav.set(false);
         spawn_local(async move {
-            self.load_chat(&field(&row, "id")).await;
+            self.load_chat(&field(&row, "id"), true).await;
         });
     }
 
-    async fn load_chat(self, session: &str) {
+    async fn load_chat(self, session: &str, preferences: bool) {
         match invoke("messages", json!({"session":session})).await {
             Ok(result) if self.session.get_untracked() == session => {
                 self.messages.set(list(&result, "messages"));
+                if preferences && self.selection.with_untracked(Value::is_null) {
+                    self.selection.set(result["preferences"].clone());
+                }
                 self.undo.set(result["undo"].as_bool().unwrap_or(false));
                 scroll_thread();
             }
@@ -239,16 +282,17 @@ impl Ui {
             return;
         }
         let mode = self.mode.get_untracked();
-        if matches!(mode.as_str(), "image" | "bot") {
-            let pack = if mode == "image" {
-                self.image_profile.get_untracked()
-            } else {
-                "voice".into()
-            };
+        let pack = match mode.as_str() {
+            "image" => Some(self.image_profile.get_untracked()),
+            "3d" => Some("shape".into()),
+            "bot" if pcm.is_some() => Some("voice".into()),
+            _ => None,
+        };
+        if let Some(pack) = pack {
             let ready = self
                 .snapshot
                 .with_untracked(|s| s["packs"][&pack]["ready"].as_bool().unwrap_or(false));
-            if !ready && (mode == "image" || !self.quiet.get_untracked() || pcm.is_some()) {
+            if !ready {
                 self.tell("Installe d’abord le pack local depuis les réglages des modèles.");
                 self.settings("models");
                 return;
@@ -280,6 +324,8 @@ impl Ui {
             let dims = match self.size.get_untracked().as_str() {
                 "wide" => (768, 512),
                 "tall" => (512, 768),
+                "medium_square" => (768, 768),
+                "large" if self.image_profile.get_untracked() != "image" => (1024, 1024),
                 _ => (512, 512),
             };
             let attachments = self
@@ -290,12 +336,14 @@ impl Ui {
                 .collect::<Vec<_>>();
             let row = json!({"session":session,"text":text,"pcm":pcm,"width":dims.0,"height":dims.1,
                 "seed":self.seed.get_untracked().parse::<i64>().ok(),"speak":!self.quiet.get_untracked(),"attachments":attachments,
-                "image_profile":self.image_profile.get_untracked()});
+                "image_profile":self.image_profile.get_untracked(),"selection":self.selection.get_untracked(),"web":self.web.get_untracked()});
             match invoke("start", row).await {
                 Ok(job) => {
                     self.job.set(job);
                     self.composer.set(String::new());
                     self.attachments.set(Vec::new());
+                    self.web.set(false);
+                    self.picker.set("");
                     let user = if text.is_empty() {
                         "Message vocal".into()
                     } else {
@@ -342,10 +390,17 @@ impl Ui {
                             scroll_thread();
                         }
                         if done {
-                            self.load_chat(&session).await;
+                            self.load_chat(&session, false).await;
                             self.refresh().await;
                             let error = field(&job, "error");
                             if !error.is_empty() {
+                                self.tell(error);
+                            } else if let Some(error) = list(&job, "events")
+                                .iter()
+                                .rev()
+                                .filter_map(Value::as_str)
+                                .find(|event| event.starts_with("Voix · "))
+                            {
                                 self.tell(error);
                             }
                             if self.mode.get_untracked() == "bot"
@@ -488,7 +543,7 @@ impl Ui {
                     if let Some(file) = conflicts.first().and_then(|c| c.get("file")) {
                         self.show_artifact(field(file, "id"));
                     }
-                    self.load_chat(&id).await;
+                    self.load_chat(&id, false).await;
                 }
                 Err(e) => self.tell(e),
             }

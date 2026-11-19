@@ -28,6 +28,10 @@ const BUILTINS: &[(&str, &str)] = &[
         include_str!("../../plugins/image/README.md"),
     ),
     (
+        include_str!("../../plugins/3d/plugin.toml"),
+        include_str!("../../plugins/3d/README.md"),
+    ),
+    (
         include_str!("../../plugins/bot/plugin.toml"),
         include_str!("../../plugins/bot/README.md"),
     ),

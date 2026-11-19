@@ -223,6 +223,7 @@ pub fn media_type(name: &str) -> &'static str {
         "ogg" => "audio/ogg",
         "mp4" => "video/mp4",
         "webm" => "video/webm",
+        "glb" => "model/gltf-binary",
         "pdf" => "application/pdf",
         "md" | "txt" | "json" | "csv" | "rs" | "js" | "css" | "svg" => "text/plain",
         _ => "application/octet-stream",
@@ -427,20 +428,27 @@ pub async fn search(settings: &Settings, query: &str) -> Result<String> {
             results.join("\n\n")
         });
     }
-    let key = vault::get("openrouter")?
-        .filter(|key| !key.is_empty())
-        .context("La recherche OpenRouter utilise la clé OpenRouter des réglages")?;
-    let search_model = if settings.provider == "openrouter" {
-        settings.model.as_str()
-    } else {
-        "openrouter/auto"
-    };
-    let result = provider::checked(client.post("https://openrouter.ai/api/v1/chat/completions").bearer_auth(key).json(&json!({
-        "model":search_model, "max_tokens":550, "plugins":[{"id":"web","max_results":5}],
+    let key = vault::get("openrouter")?.filter(|key| !key.is_empty());
+    if settings.search == "duckduckgo" || key.is_none() {
+        return public_search(&client, &query).await;
+    }
+    let result = async {
+        provider::checked(client.post("https://openrouter.ai/api/v1/chat/completions").bearer_auth(key.unwrap()).json(&json!({
+        "model":"openrouter/auto", "max_tokens":1200, "plugins":[{"id":"web","max_results":5}],
         "messages":[{"role":"system","content":"Recherche ces termes. Donne les faits et les URL des sources web consultées."},{"role":"user","content":query}]
-    })).send().await?).await?.json::<Value>().await?;
+        })).timeout(Duration::from_secs(42)).send().await?).await?.json::<Value>().await.map_err(anyhow::Error::from)
+    }.await;
+    let result = match result {
+        Ok(result) => result,
+        Err(error) => {
+            return public_search(&client, &query)
+                .await
+                .with_context(|| format!("OpenRouter Web : {error}"));
+        }
+    };
     let message = &result["choices"][0]["message"];
     let mut text = message["content"].as_str().unwrap_or_default().to_owned();
+    let mut count = 0;
     for entry in message["annotations"]
         .as_array()
         .into_iter()
@@ -448,14 +456,88 @@ pub async fn search(settings: &Settings, query: &str) -> Result<String> {
         .take(6)
     {
         let cite = &entry["url_citation"];
-        if let Some(url) = cite["url"].as_str() {
+        if let Some(url) = cite["url"]
+            .as_str()
+            .filter(|url| Url::parse(url).is_ok_and(|url| matches!(url.scheme(), "http" | "https")))
+        {
+            count += 1;
             text.push_str(&format!(
                 "\n{} · {url}",
                 cite["title"].as_str().unwrap_or("Source")
             ));
         }
     }
+    if count == 0 {
+        return public_search(&client, &query).await;
+    }
     Ok(clipped(&text, 5000))
+}
+
+async fn public_search(client: &Client, query: &str) -> Result<String> {
+    let response = provider::checked(
+        client
+            .get("https://html.duckduckgo.com/html/")
+            .query(&[("q", query)])
+            .timeout(Duration::from_secs(18))
+            .send()
+            .await?,
+    )
+    .await?;
+    let markup = response.text().await?;
+    let html = Html::parse_document(&markup);
+    let result = Selector::parse(".result__body").unwrap();
+    let anchor = Selector::parse(".result__a").unwrap();
+    let snippet = Selector::parse(".result__snippet").unwrap();
+    let sources = html
+        .select(&result)
+        .filter_map(|row| {
+            let link = row.select(&anchor).next()?;
+            let href = link.value().attr("href")?;
+            let url = if href.starts_with("//") && href.contains("duckduckgo.com/l/?") {
+                Url::parse(&format!("https:{href}"))
+                    .ok()?
+                    .query_pairs()
+                    .find(|(k, _)| k == "uddg")?
+                    .1
+                    .into_owned()
+            } else {
+                href.to_owned()
+            };
+            let parsed = Url::parse(&url).ok()?;
+            if !matches!(parsed.scheme(), "http" | "https") {
+                return None;
+            }
+            let title = link.text().collect::<Vec<_>>().join(" ");
+            let summary = row
+                .select(&snippet)
+                .next()
+                .map(|el| el.text().collect::<Vec<_>>().join(" "))
+                .unwrap_or_default();
+            Some(format!("{title}\n{url}\n{}", clipped(&summary, 320)))
+        })
+        .take(6)
+        .collect::<Vec<_>>();
+    if sources.is_empty() {
+        bail!(
+            "DuckDuckGo n’a renvoyé aucune source lisible. Tu peux choisir OpenRouter ou SearXNG dans Réglages → Connecteurs."
+        );
+    }
+    Ok(sources.join("\n\n"))
+}
+
+pub fn explicit_search(request: &str) -> bool {
+    use std::sync::LazyLock;
+    static WEB: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+        r"(?i)^/web\s+\S|^(?:peux-tu\s+|tu\s+peux\s+)?(?:fais\s+(?:une|des)\s+recherches?\s+sur|recherche\s+(?:des|\d+|deux|trois)\s+sources|look\s+up)\b|\b(?:recherch(?:e|er|es)|cherch(?:e|er|es)|vérifi(?:e|er)|trouv(?:e|er)|regard(?:e|er)|search|browse|look\s+up|consulte)\b[^.!?\n]{0,60}\b(?:web|internet|en\s+ligne|online|sur\s+le\s+net)\b"
+    ).unwrap()
+    });
+    static OPT_OUT: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+        r"(?i)\b(?:sans\s+(?:faire\s+)?(?:de\s+)?recherche\s+(?:web|en\s+ligne)|ne\s+(?:recherche|cherche|navigue)\s+pas|do\s+not\s+(?:search|browse))\b"
+    ).unwrap()
+    });
+    WEB.is_match(request.trim()) && !OPT_OUT.is_match(request)
 }
 
 fn public_ip(ip: IpAddr) -> bool {

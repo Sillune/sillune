@@ -53,6 +53,30 @@ async fn answer(mut socket: TcpStream) -> anyhow::Result<()> {
         }
         request.extend_from_slice(&chunk[..n]);
     }
+    let target = header
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or_default();
+    let response = if target == "/v1/models" {
+        Some(
+            json!({"data":[{"id":"fixture-model","display_name":"Modèle de validation",
+            "reasoning":{"supported_efforts":["minimal","medium","high","xhigh"]},
+            "supported_parameters":[]}]}),
+        )
+    } else if target.starts_with("/v1/search?") {
+        Some(
+            json!({"results":[{"title":"Source des essais","url":"https://example.org/robot",
+            "content":"Donnée contrôlée SILLUNE_WEB_QUALIFICATION"}]}),
+        )
+    } else {
+        None
+    };
+    if let Some(response) = response {
+        let payload = response.to_string();
+        socket.write_all(format!("HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{payload}", payload.len()).as_bytes()).await?;
+        return Ok(());
+    }
     let body: Value = serde_json::from_slice(&request[start..start + bytes]).unwrap_or(Value::Null);
     let messages = body["messages"].as_array();
     let latest = messages
@@ -61,7 +85,15 @@ async fn answer(mut socket: TcpStream) -> anyhow::Result<()> {
         .unwrap_or(Value::Null);
     let text = latest["content"].as_str().unwrap_or_default();
     let tool = |index: u32, name: &str, args: Value| json!({"index":index,"id":format!("job-{index}"),"type":"function","function":{"name":name,"arguments":args.to_string()}});
-    let event = if latest["role"] == "tool" {
+    let event = if body["model"] == "fixture-model" {
+        let works = text.contains("SILLUNE_WEB_QUALIFICATION")
+            && text.contains("https://example.org/robot")
+            && body["reasoning_effort"] == "xhigh"
+            && body["tools"].is_null();
+        json!({"choices":[{"delta":{"content":if works {"Recherche, modèle et effort vérifiés."} else {"Données manquantes."}}}]})
+    } else if text.contains("ancienne syntaxe") {
+        json!({"choices":[{"delta":{"function_call":{"name":"deliver_file","arguments":"{\"name\":\"ancien.txt\",\"content\":\"Pièce jointe\"}"}}}]})
+    } else if latest["role"] == "tool" {
         json!({"choices":[{"delta":{"content":if text.starts_with("Action non") {"L’action a été refusée."} else {"Terminé."}}}]})
     } else if text.contains("comparatif") {
         json!({"choices":[{"delta":{"tool_calls":[
@@ -101,7 +133,16 @@ async fn session(app: &Arc<App>, mode: &str) -> String {
 }
 
 async fn poll(app: &Arc<App>, id: &str, condition: impl Fn(&Value) -> bool) -> Value {
-    tokio::time::timeout(Duration::from_secs(140), async {
+    poll_for(app, id, 140, condition).await
+}
+
+async fn poll_for(
+    app: &Arc<App>,
+    id: &str,
+    seconds: u64,
+    condition: impl Fn(&Value) -> bool,
+) -> Value {
+    tokio::time::timeout(Duration::from_secs(seconds), async {
         loop {
             let value = app.dispatch("poll", json!({"session":id})).await.unwrap();
             if condition(&value) {
@@ -116,6 +157,81 @@ async fn poll(app: &Arc<App>, id: &str, condition: impl Fn(&Value) -> bool) -> V
 
 fn artifact_id(poll: &Value) -> &str {
     poll["files"][0]["id"].as_str().expect("pièce jointe")
+}
+
+#[tokio::test]
+async fn discovers_models_runs_web_without_native_tools_and_keeps_chat_preferences() {
+    let tmp = tempfile::tempdir().unwrap();
+    let app = App::open(tmp.path().join("profile")).unwrap();
+    let url = fixture().await;
+    app.store
+        .save_settings(&Settings {
+            provider: "compatible".into(),
+            model: "fixture".into(),
+            search: "searx".into(),
+            searx_url: url.clone(),
+            url,
+            ..Settings::default()
+        })
+        .unwrap();
+    let snapshot = app.dispatch("snapshot", json!({})).await.unwrap();
+    for pack in ["image", "quality", "zimage", "shape", "voice"] {
+        assert_eq!(snapshot["packs"][pack]["ready"], false);
+    }
+    assert!(!tmp.path().join("profile/runtime").exists());
+    let rows = app
+        .dispatch("models", json!({"provider":"compatible","refresh":true}))
+        .await
+        .unwrap();
+    assert_eq!(rows[0]["id"], "fixture-model");
+    let chat = session(&app, "chat").await;
+    app.dispatch(
+        "chat_preferences",
+        json!({"session":chat,"provider":"compatible","model":"fixture-model","effort":5}),
+    )
+    .await
+    .unwrap();
+    app.dispatch(
+        "start",
+        json!({"session":chat,"text":"Cherche sur le web des informations sur les robots."}),
+    )
+    .await
+    .unwrap();
+    let result = poll(&app, &chat, |v| v["done"] == true).await;
+    assert_eq!(result["error"], "");
+    assert_eq!(result["text"], "Recherche, modèle et effort vérifiés.");
+    assert!(
+        result["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e.as_str().unwrap().contains("Recherche web exécutée"))
+    );
+    let history = app
+        .dispatch("messages", json!({"session":chat}))
+        .await
+        .unwrap();
+    assert_eq!(history["preferences"]["effort"], 5);
+    assert_eq!(app.store.settings().unwrap().model, "fixture");
+    let independent = session(&app, "chat").await;
+    app.dispatch(
+        "start",
+        json!({"session":independent,"text":"Essaie l’ancienne syntaxe."}),
+    )
+    .await
+    .unwrap();
+    let result = poll(&app, &independent, |v| v["done"] == true).await;
+    assert_eq!(result["error"], "");
+    assert_eq!(result["files"][0]["name"], "ancien.txt");
+    app.dispatch("session_delete", json!({"session":chat}))
+        .await
+        .unwrap();
+    assert!(
+        app.store
+            .kv(&format!("chat-model/{chat}"))
+            .unwrap()
+            .is_none()
+    );
 }
 
 #[test]
@@ -386,4 +502,53 @@ async fn local_image_and_french_voice() {
         result["events"].as_array().unwrap().len()
     );
     app.engines.close_voice().await;
+}
+
+#[tokio::test]
+#[ignore = "Nécessite les packs Z-Image et Shap-E installés"]
+async fn optional_zimage_and_3d() {
+    let root = tempfile::tempdir().unwrap();
+    let app = App::open(root.path().into()).unwrap();
+    app.store
+        .save_settings(&Settings {
+            engines: std::env::var("SILLUNE_RUNTIME_TEST").expect("dossier Runtime"),
+            ..Settings::default()
+        })
+        .unwrap();
+    let image = session(&app, "image").await;
+    for side in [768, 768, 1024] {
+        app.dispatch("start", json!({"session":image, "image_profile":"zimage",
+            "text":"A red toy robot in a moonlit workshop, copper details, soft blue eye lights, studio photograph",
+            "width":side,"height":side,"seed":42})).await.unwrap();
+        let result = poll_for(&app, &image, 320, |v| v["done"] == true).await;
+        assert_eq!(result["error"], "");
+        let (_, data) = app.store.artifact(artifact_id(&result)).unwrap();
+        assert_eq!(&data[..8], b"\x89PNG\r\n\x1a\n");
+        assert_eq!(u32::from_be_bytes(data[16..20].try_into().unwrap()), side);
+        println!("Z-Image: {}", result["text"].as_str().unwrap());
+    }
+    let mesh = session(&app, "3d").await;
+    app.dispatch(
+        "start",
+        json!({"session":mesh,
+        "text":"A small red robot with a round head and two blue eyes","seed":42}),
+    )
+    .await
+    .unwrap();
+    let result = poll_for(&app, &mesh, 1000, |v| v["done"] == true).await;
+    assert_eq!(result["error"], "");
+    let (file, data) = app.store.artifact(artifact_id(&result)).unwrap();
+    assert_eq!(file.media, "model/gltf-binary");
+    assert_eq!(&data[..4], b"glTF");
+    assert_eq!(
+        u32::from_le_bytes(data[8..12].try_into().unwrap()) as usize,
+        data.len()
+    );
+    let end = 20 + u32::from_le_bytes(data[12..16].try_into().unwrap()) as usize;
+    let metadata: Value = serde_json::from_slice(&data[20..end]).unwrap();
+    let attributes = &metadata["meshes"][0]["primitives"][0]["attributes"];
+    assert!(attributes["POSITION"].is_number());
+    assert!(attributes["COLOR_0"].is_number());
+    println!("Shap-E: {}", result["text"].as_str().unwrap());
+    app.engines.close().await;
 }

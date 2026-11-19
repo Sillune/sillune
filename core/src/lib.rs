@@ -1,6 +1,8 @@
 pub mod app;
+mod catalog;
 mod drive_auth;
 pub mod engines;
+mod mesh;
 pub mod plugins;
 pub mod provider;
 pub mod skills;

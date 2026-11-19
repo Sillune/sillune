@@ -1,4 +1,4 @@
-use crate::{storage::Settings, vault};
+use crate::{catalog, storage::Settings, vault};
 use anyhow::{Context, Result, bail};
 use futures_util::StreamExt;
 use reqwest::{Client, RequestBuilder, Response, redirect::Policy};
@@ -13,6 +13,7 @@ enum Protocol {
     Chat,
     Anthropic,
     Responses,
+    Gemini,
 }
 
 pub struct Provider {
@@ -22,6 +23,9 @@ pub struct Provider {
     protocol: Protocol,
     key: String,
     pub model: String,
+    account: String,
+    effort: Option<String>,
+    pub tools: Option<bool>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,6 +55,8 @@ pub struct Completion {
     pub text: String,
     pub calls: BTreeMap<u32, Call>,
     pub usage: Usage,
+    native: BTreeMap<u32, Value>,
+    reasoning_details: Vec<Value>,
 }
 
 impl Completion {
@@ -66,7 +72,8 @@ impl Completion {
         let calls = self.calls.values().map(|call| json!({
             "id":call.id,"type":"function","function":{"name":call.name,"arguments":call.input}
         })).collect::<Vec<_>>();
-        json!({"role":"assistant","content":self.text,"tool_calls":calls})
+        json!({"role":"assistant","content":self.text,"tool_calls":calls,
+            "native":self.native.values().collect::<Vec<_>>(),"reasoning_details":self.reasoning_details})
     }
 }
 
@@ -75,7 +82,7 @@ pub fn client() -> Result<Client> {
         .redirect(Policy::none())
         .connect_timeout(Duration::from_secs(12))
         .timeout(Duration::from_secs(180))
-        .user_agent("Sillune/0.1")
+        .user_agent(concat!("Sillune/", env!("CARGO_PKG_VERSION")))
         .build()?)
 }
 
@@ -148,6 +155,7 @@ impl Provider {
             Protocol::Chat => "/chat/completions",
             Protocol::Anthropic => "/messages",
             Protocol::Responses => "/responses",
+            Protocol::Gemini => unreachable!(),
         };
         let endpoint = format!("{base}{suffix}");
         Ok(Self {
@@ -157,7 +165,70 @@ impl Provider {
             protocol,
             key,
             model,
+            account: settings.provider.clone(),
+            effort: None,
+            tools: None,
         })
+    }
+
+    pub async fn resolve(settings: &Settings, level: Option<u8>) -> Result<Self> {
+        let mut provider = Self::new(settings)?;
+        let found = if settings.provider == "opencode"
+            || level.is_some()
+            || settings.provider == "openrouter"
+        {
+            match catalog::list(settings, false).await {
+                Ok(models) => models.into_iter().find(|m| m.id == settings.model),
+                Err(error) if settings.provider == "opencode" => return Err(error),
+                Err(_) => None,
+            }
+        } else {
+            None
+        };
+        if let Some(model) = found.as_ref() {
+            provider.tools = model.tools;
+            if let Some(route) = &model.route {
+                provider.model = route.id.clone();
+                provider.base = route.base.clone();
+                provider.protocol = match route.protocol.as_str() {
+                    "messages" => Protocol::Anthropic,
+                    "responses" => Protocol::Responses,
+                    "generate-content" => Protocol::Gemini,
+                    _ => Protocol::Chat,
+                };
+                let suffix = match provider.protocol {
+                    Protocol::Anthropic => "/messages".into(),
+                    Protocol::Responses => "/responses".into(),
+                    Protocol::Gemini => {
+                        if !route
+                            .id
+                            .bytes()
+                            .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte))
+                        {
+                            bail!("Identifiant Gemini invalide");
+                        }
+                        format!("/models/{}:streamGenerateContent?alt=sse", route.id)
+                    }
+                    Protocol::Chat => "/chat/completions".into(),
+                };
+                provider.endpoint = format!("{}{suffix}", provider.base);
+            }
+        }
+        if settings.provider == "opencode" && found.is_none() {
+            bail!("Choisis un modèle disponible dans le catalogue OpenCode");
+        }
+        let efforts = found.map(|m| m.efforts).unwrap_or_else(|| {
+            catalog::known_efforts(&settings.provider, &settings.model)
+                .iter()
+                .map(|x| (*x).into())
+                .collect()
+        });
+        provider.effort = level.and_then(|level| catalog::effective(level, &efforts));
+        Ok(provider)
+    }
+
+    pub fn effort(&self) -> Option<&str> {
+        self.effort.as_deref()
     }
 
     fn auth(&self, request: RequestBuilder) -> RequestBuilder {
@@ -170,23 +241,6 @@ impl Provider {
         }
     }
 
-    pub async fn models(&self) -> Result<Vec<String>> {
-        let response = self
-            .auth(self.client.get(format!("{}/models", self.base)))
-            .send()
-            .await?;
-        let json = checked(response).await?.json::<Value>().await?;
-        let mut ids = json["data"]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|m| m["id"].as_str().map(str::to_owned))
-            .collect::<Vec<_>>();
-        ids.sort_unstable();
-        ids.dedup();
-        Ok(ids)
-    }
-
     pub async fn complete(
         &self,
         system: &str,
@@ -196,9 +250,15 @@ impl Provider {
         cancel: &CancellationToken,
         mut delta: impl FnMut(&str) + Send,
     ) -> Result<Completion> {
+        let tools = if self.tools == Some(false) {
+            &[]
+        } else {
+            tools
+        };
         let body = self.body(system, messages, tools, max);
         let response = tokio::select! {
-            r = self.auth(self.client.post(&self.endpoint)).json(&body).send() => checked(r?).await?,
+            r = self.send(body, !tools.is_empty() && !messages.iter().any(|v|v["role"]=="tool"),
+                || self.body(system,messages,&[],max)) => r?,
             _ = cancel.cancelled() => bail!("Arrêté"),
         };
         let is_sse = response
@@ -210,6 +270,7 @@ impl Provider {
         if !is_sse {
             let value = response.json::<Value>().await?;
             self.parse_non_stream(&value, &mut result)?;
+            normalize_calls(&mut result);
             delta(&result.text);
             return Ok(result);
         }
@@ -261,15 +322,68 @@ impl Provider {
         if result.calls.is_empty() && result.text.trim().is_empty() {
             bail!("Le modèle a renvoyé un résultat vide");
         }
+        normalize_calls(&mut result);
         Ok(result)
     }
 
+    async fn send(
+        &self,
+        body: Value,
+        can_retry: bool,
+        plain: impl FnOnce() -> Value,
+    ) -> Result<Response> {
+        let post = |body: &Value| self.auth(self.client.post(&self.endpoint)).json(body);
+        let response = post(&body).send().await?;
+        if can_retry && matches!(response.status().as_u16(), 400 | 404 | 422) {
+            let status = response.status();
+            let detail = response
+                .text()
+                .await
+                .unwrap_or_default()
+                .to_ascii_lowercase();
+            if [
+                "does not support tools",
+                "does not support tool",
+                "doesn't support tool",
+                "not support function calling",
+                "no endpoints found that support tool",
+                "tool use is not supported",
+                "tool calling is not supported",
+                "tools are not supported",
+            ]
+            .iter()
+            .any(|needle| detail.contains(needle))
+            {
+                return checked(post(&plain()).send().await?).await;
+            }
+            bail!("HTTP {status} · requête refusée");
+        }
+        checked(response).await
+    }
+
     fn body(&self, system: &str, messages: &[Value], tools: &[Value], max: u32) -> Value {
-        match self.protocol {
+        let mut body = match self.protocol {
             Protocol::Chat => {
                 let all = [
                     vec![json!({"role":"system","content":system})],
-                    messages.to_vec(),
+                    messages
+                        .iter()
+                        .map(|message| {
+                            let mut output = message.clone();
+                            if let Some(fields) = output.as_object_mut() {
+                                fields.remove("native");
+                                if self.account != "openrouter"
+                                    || fields
+                                        .get("reasoning_details")
+                                        .and_then(Value::as_array)
+                                        .is_some_and(Vec::is_empty)
+                                {
+                                    fields.remove("reasoning_details");
+                                }
+                            }
+                            output
+                        })
+                        .collect(),
                 ]
                 .concat();
                 let mut body =
@@ -288,7 +402,7 @@ impl Provider {
                     if message["role"] == "tool" {
                         all.push(json!({"role":"user","content":[{"type":"tool_result","tool_use_id":message["tool_call_id"],"content":message["content"]}]}));
                     } else if let Some(calls) = message["tool_calls"].as_array() {
-                        let mut blocks = Vec::new();
+                        let mut blocks = message["native"].as_array().cloned().unwrap_or_default();
                         if let Some(text) = message["content"].as_str().filter(|s| !s.is_empty()) {
                             blocks.push(json!({"type":"text","text":text}));
                         }
@@ -317,6 +431,10 @@ impl Provider {
                 for message in messages {
                     if message["role"] == "tool" {
                         input.push(json!({"type":"function_call_output","call_id":message["tool_call_id"],"output":message["content"]}));
+                    } else if let Some(native) =
+                        message["native"].as_array().filter(|a| !a.is_empty())
+                    {
+                        input.extend(native.iter().cloned());
                     } else {
                         if message["content"].as_str().is_some_and(|s| !s.is_empty()) {
                             input
@@ -330,6 +448,12 @@ impl Provider {
                     }
                 }
                 let mut body = json!({"model":self.model,"input":input,"instructions":system,"stream":true,"max_output_tokens":max,"store":false});
+                if self.effort.is_some()
+                    || self.model.starts_with("gpt-5")
+                    || self.model.starts_with('o')
+                {
+                    body["include"] = json!(["reasoning.encrypted_content"]);
+                }
                 if !tools.is_empty() {
                     body["tools"] = json!(tools.iter().map(|tool| json!({
                         "type":"function","name":tool["function"]["name"],"description":tool["function"]["description"],
@@ -338,7 +462,76 @@ impl Provider {
                 }
                 body
             }
+            Protocol::Gemini => {
+                let mut contents = Vec::new();
+                let mut tool_names = BTreeMap::new();
+                for message in messages {
+                    if message["role"] == "tool" {
+                        let id = message["tool_call_id"].as_str().unwrap_or_default();
+                        let name = tool_names.get(id).copied().unwrap_or("tool");
+                        contents.push(json!({"role":"user","parts":[{"functionResponse":{"name":name,"response":{"result":message["content"]}}}]}));
+                    } else if let Some(native) =
+                        message["native"].as_array().filter(|v| !v.is_empty())
+                    {
+                        for call in message["tool_calls"].as_array().into_iter().flatten() {
+                            if let (Some(id), Some(name)) =
+                                (call["id"].as_str(), call["function"]["name"].as_str())
+                            {
+                                tool_names.insert(id, name);
+                            }
+                        }
+                        contents.push(json!({"role":"model","parts":native}));
+                    } else {
+                        let role = if message["role"] == "assistant" {
+                            "model"
+                        } else {
+                            "user"
+                        };
+                        contents.push(json!({"role":role,"parts":[{"text":message["content"]}]}));
+                    }
+                }
+                let mut body = json!({"systemInstruction":{"parts":[{"text":system}]},"contents":contents,
+                    "generationConfig":{"maxOutputTokens":max}});
+                if !tools.is_empty() {
+                    body["tools"] = json!([{"functionDeclarations":tools.iter().map(|tool| json!({
+                        "name":tool["function"]["name"],"description":tool["function"]["description"],
+                        "parameters":tool["function"]["parameters"]
+                    })).collect::<Vec<_>>()}]);
+                }
+                body
+            }
+        };
+        let Some(effort) = self.effort.as_ref().filter(|_| max >= 5000) else {
+            return body;
+        };
+        match self.protocol {
+            Protocol::Responses => body["reasoning"] = json!({"effort":effort}),
+            Protocol::Anthropic => {
+                body["thinking"] = json!({"type":"adaptive","display":"omitted"});
+                body["output_config"] = json!({"effort":effort});
+            }
+            Protocol::Gemini => {
+                body["generationConfig"]["thinkingConfig"] =
+                    json!({"thinkingLevel":effort.to_uppercase()})
+            }
+            Protocol::Chat if self.account == "openrouter" => {
+                body["reasoning"] = json!({"effort":effort})
+            }
+            Protocol::Chat => body["reasoning_effort"] = json!(effort),
         }
+        if matches!(self.protocol, Protocol::Responses) {
+            let reserve = if matches!(effort.as_str(), "max" | "ultra") {
+                32_768
+            } else {
+                16_384
+            };
+            body["max_output_tokens"] = json!(max.max(reserve));
+        } else if matches!(self.protocol, Protocol::Gemini) {
+            body["generationConfig"]["maxOutputTokens"] = json!(max.max(16_384));
+        } else {
+            body["max_tokens"] = json!(max.max(16_384));
+        }
+        body
     }
 
     fn parse_event(&self, event: &Value, result: &mut Completion) -> Result<()> {
@@ -354,6 +547,20 @@ impl Provider {
                 let delta = &event["choices"][0]["delta"];
                 if let Some(text) = delta["content"].as_str() {
                     result.text.push_str(text);
+                } else if let Some(parts) = delta["content"].as_array() {
+                    for part in parts.iter().filter(|p| p["type"] == "text") {
+                        if let Some(text) = part["text"].as_str() {
+                            result.text.push_str(text);
+                        }
+                    }
+                }
+                if let Some(items) = delta["reasoning_details"].as_array() {
+                    result.reasoning_details.extend(items.iter().cloned());
+                }
+                if let Some(old) = delta.get("function_call") {
+                    let call = result.call(0);
+                    call.name.push_str(&string(&old["name"]));
+                    call.input.push_str(&string(&old["arguments"]));
                 }
                 if let Some(calls) = delta["tool_calls"].as_array() {
                     for value in calls {
@@ -385,6 +592,24 @@ impl Provider {
                         if let Some(input) = event["delta"]["partial_json"].as_str() {
                             result.call(index).input.push_str(input);
                         }
+                        if let Some(block) = result.native.get_mut(&index) {
+                            for key in ["thinking", "signature"] {
+                                if let Some(part) = event["delta"][key].as_str() {
+                                    block[key] = json!(format!(
+                                        "{}{part}",
+                                        block[key].as_str().unwrap_or_default()
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    Some("content_block_start")
+                        if matches!(
+                            event["content_block"]["type"].as_str(),
+                            Some("thinking" | "redacted_thinking")
+                        ) =>
+                    {
+                        result.native.insert(index, event["content_block"].clone());
                     }
                     _ => {}
                 }
@@ -413,6 +638,43 @@ impl Provider {
                         set_usage(&mut result.usage, &event["response"]["usage"])
                     }
                     _ => {}
+                }
+                if event["type"] == "response.output_item.done" {
+                    let item = &event["item"];
+                    if matches!(
+                        item["type"].as_str(),
+                        Some("function_call" | "reasoning" | "message")
+                    ) {
+                        result.native.insert(index, item.clone());
+                    }
+                }
+            }
+            Protocol::Gemini => {
+                let meta = &event["usageMetadata"];
+                set_usage(
+                    &mut result.usage,
+                    &json!({"input_tokens":meta["promptTokenCount"],"output_tokens":meta["candidatesTokenCount"]}),
+                );
+                for part in event["candidates"][0]["content"]["parts"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                {
+                    let index = result.native.len() as u32;
+                    if let Some(call) = part.get("functionCall") {
+                        let info = result.call(index);
+                        info.id = call["id"]
+                            .as_str()
+                            .map(str::to_owned)
+                            .unwrap_or_else(|| format!("call_{index}"));
+                        info.name = string(&call["name"]);
+                        info.input = call.get("args").cloned().unwrap_or(json!({})).to_string();
+                    } else if part["thought"] != true
+                        && let Some(content) = part["text"].as_str()
+                    {
+                        result.text.push_str(content);
+                    }
+                    result.native.insert(index, part.clone());
                 }
             }
         }
@@ -444,6 +706,12 @@ impl Provider {
                     .flatten()
                     .enumerate()
                 {
+                    if matches!(
+                        block["type"].as_str(),
+                        Some("thinking" | "redacted_thinking")
+                    ) {
+                        result.native.insert(i as u32, block.clone());
+                    }
                     if let Some(text) = block["text"].as_str() {
                         result.text.push_str(text);
                     }
@@ -469,11 +737,24 @@ impl Provider {
                     )?;
                 }
             }
+            Protocol::Gemini => self.parse_event(value, result)?,
         }
         if result.calls.is_empty() && result.text.trim().is_empty() {
             bail!("Le modèle a renvoyé un résultat vide");
         }
         Ok(())
+    }
+}
+
+fn normalize_calls(result: &mut Completion) {
+    result.calls.retain(|_, call| !call.name.is_empty());
+    for call in result.calls.values_mut() {
+        if call.id.is_empty() {
+            call.id = format!("call_{}", uuid::Uuid::new_v4().simple());
+        }
+        if call.input.is_empty() {
+            call.input = "{}".into();
+        }
     }
 }
 

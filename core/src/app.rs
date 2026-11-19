@@ -1,4 +1,5 @@
 use crate::{
+    catalog,
     engines::{Engines, VoiceEndpoint},
     plugins::Registry,
     provider::{self, Provider, Usage},
@@ -88,6 +89,14 @@ struct Turn<'a> {
     mode: Mode,
     settings: &'a Settings,
     job: &'a Job,
+    web: bool,
+}
+
+fn valid_provider(provider: &str) -> bool {
+    matches!(
+        provider,
+        "openrouter" | "openai" | "anthropic" | "mistral" | "nous" | "opencode" | "compatible"
+    )
 }
 
 impl App {
@@ -122,8 +131,26 @@ impl App {
                     .map(|(_, m)| m)
                     .collect::<Vec<_>>();
                 Ok(
-                    json!({"messages":messages,"undo":!self.store.last_changes(session)?.is_empty()}),
+                    json!({"messages":messages,"undo":!self.store.last_changes(session)?.is_empty(),
+                        "preferences": self.store.kv(&format!("chat-model/{session}"))?}),
                 )
+            }
+            "chat_preferences" => {
+                let session = arg(&data, "session")?;
+                if !self.store.sessions()?.iter().any(|row| row.id == session) {
+                    bail!("Conversation inconnue");
+                }
+                let provider = arg(&data, "provider")?;
+                let model = arg(&data, "model")?;
+                if !valid_provider(provider) || model.trim().is_empty() || model.len() > 300 {
+                    bail!("Modèle invalide");
+                }
+                let effort = data["effort"].as_u64().filter(|v| *v < 6);
+                self.store.set_kv(
+                    &format!("chat-model/{session}"),
+                    &json!({"provider":provider,"model":model,"effort":effort}),
+                )?;
+                Ok(Value::Null)
             }
             "session_new" => {
                 let mode: Mode = serde_json::from_value(data["mode"].clone())?;
@@ -177,7 +204,14 @@ impl App {
                         | "compatible"
                 ) || !matches!(settings.permission.as_str(), "ask" | "safe" | "all")
                     || !matches!(settings.theme.as_str(), "system" | "light" | "dark")
-                    || !matches!(settings.search.as_str(), "openrouter" | "searx")
+                    || !matches!(
+                        settings.search.as_str(),
+                        "openrouter" | "searx" | "duckduckgo"
+                    )
+                    || !matches!(
+                        settings.voice.as_str(),
+                        "local-female" | "local-male" | "openai-marin" | "openai-cedar"
+                    )
                     || settings.instructions.len() > 16_000
                     || settings.model.len() > 300
                 {
@@ -232,11 +266,25 @@ impl App {
                     bail!("Secret inconnu");
                 }
                 vault::set(name, value.trim())?;
+                catalog::clear();
                 self.snapshot()
             }
             "models" => {
-                let settings = self.store.settings()?;
-                Ok(json!(Provider::new(&settings)?.models().await?))
+                let mut settings = self.store.settings()?;
+                if let Some(id) = data["provider"].as_str() {
+                    if !valid_provider(id) {
+                        bail!("Fournisseur inconnu");
+                    }
+                    settings.provider = id.into();
+                }
+                if settings.provider == "compatible"
+                    && let Some(url) = data["url"].as_str()
+                {
+                    settings.url = url.into();
+                }
+                Ok(json!(
+                    catalog::list(&settings, data["refresh"] == true).await?
+                ))
             }
             "drive_connect" => {
                 let (url, flow) = crate::drive_auth::authorize(
@@ -452,7 +500,7 @@ impl App {
     }
 
     fn download(self: &Arc<Self>, pack: &str) -> Result<Value> {
-        if !matches!(pack, "voice" | "image" | "quality") {
+        if !matches!(pack, "voice" | "image" | "quality" | "zimage" | "shape") {
             bail!("Pack inconnu");
         }
         let app = self.clone();
@@ -496,12 +544,46 @@ impl App {
         prompt: &str,
         data: Value,
     ) -> Result<()> {
-        let settings = self.store.settings()?;
+        let mut settings = self.store.settings()?;
+        let saved = self
+            .store
+            .kv(&format!("chat-model/{session}"))?
+            .unwrap_or_default();
+        let preferences = if data["selection"].is_object() {
+            &data["selection"]
+        } else {
+            &saved
+        };
+        if let (Some(provider), Some(model)) = (
+            preferences["provider"].as_str(),
+            preferences["model"].as_str(),
+        ) {
+            if !valid_provider(provider) || model.trim().is_empty() || model.len() > 300 {
+                bail!("Modèle invalide");
+            }
+            settings.provider = provider.to_owned();
+            settings.model = model.to_owned();
+        }
+        let effort = preferences["effort"]
+            .as_u64()
+            .filter(|v| *v < 6)
+            .map(|v| v as u8);
+        if data["selection"].is_object() {
+            self.store.set_kv(
+                &format!("chat-model/{session}"),
+                &json!({
+                    "provider": settings.provider, "model": settings.model, "effort": effort,
+                }),
+            )?;
+        }
         let mut request = prompt.to_owned();
         let mut voice = None;
-        let voice_on = mode == Mode::Bot
-            && (data["speak"].as_bool().unwrap_or(true) || data["pcm"].is_string());
-        if voice_on {
+        let voice_on = mode == Mode::Bot && data["speak"].as_bool().unwrap_or(true);
+        let local_chat = mode == Mode::Bot
+            && settings.provider == "openrouter"
+            && settings.model == "openrouter/auto"
+            && vault::get("openrouter")?.is_none();
+        if mode == Mode::Bot && (data["pcm"].is_string() || local_chat) {
             job.status("thinking", "Préparation de la voix LFM3");
             voice = Some(self.engines.voice_endpoint(&settings, &job.cancel).await?);
         }
@@ -532,10 +614,10 @@ impl App {
             let profile = data["image_profile"].as_str().unwrap_or("image");
             job.status(
                 "image",
-                if profile == "quality" {
-                    "FLUX.2 · Génération locale"
-                } else {
-                    "SDXS · Génération locale"
+                match profile {
+                    "quality" => "FLUX.2 · Génération locale",
+                    "zimage" => "Z-Image Turbo · Génération locale",
+                    _ => "SDXS · Génération locale",
                 },
             );
             let width = data["width"].as_u64().unwrap_or(512) as u32;
@@ -569,16 +651,43 @@ impl App {
                     if gpu { "Vulkan" } else { "CPU" }
                 )
             });
+        } else if mode == Mode::ThreeD {
+            let seed = data["seed"]
+                .as_u64()
+                .and_then(|n| u32::try_from(n).ok())
+                .unwrap_or_else(|| (Uuid::new_v4().as_u128() & 0x7fff_ffff) as u32);
+            let start = std::time::Instant::now();
+            job.status("3d", "Shap-E · Génération du maillage");
+            let mesh = self
+                .engines
+                .mesh(&settings, &request, seed, &job.cancel, |status| {
+                    job.status("3d", status);
+                })
+                .await?;
+            job.file(self.store.add_artifact(
+                &format!("sillune-{seed}.glb"),
+                "model/gltf-binary",
+                &mesh.bytes,
+            )?);
+            job.modify(|v| {
+                v.text = format!(
+                    "{} triangles · graine {seed} · {:.1} s · {}",
+                    mesh.triangles,
+                    start.elapsed().as_secs_f64(),
+                    mesh.device
+                );
+            });
         } else {
             let context = Turn {
                 session,
                 mode,
                 settings: &settings,
                 job,
+                web: data["web"] == true,
             };
-            let provider = match Provider::new(&settings) {
+            let provider = match Provider::resolve(&settings, effort).await {
                 Ok(p) => p,
-                Err(error) if mode == Mode::Bot && voice.is_some() => {
+                Err(error) if local_chat && voice.is_some() => {
                     let endpoint = voice.as_ref().unwrap();
                     Provider::with_key(
                         &Settings {
@@ -593,6 +702,11 @@ impl App {
                 }
                 Err(e) => return Err(e),
             };
+            if let Some(level) = provider.effort() {
+                job.event(format!("Raisonnement transmis au modèle · {level}"));
+            } else if effort.is_some() {
+                job.event("Ce modèle utilise son effort de raisonnement par défaut.".into());
+            }
             self.conversation(
                 &context,
                 &provider,
@@ -600,11 +714,19 @@ impl App {
                 data["full_context"].as_bool().unwrap_or(false),
             )
             .await?;
-            if let Some(endpoint) = &voice {
+            if voice_on {
                 let text = job.view.lock().unwrap().text.clone();
                 if !text.trim().is_empty() && !job.cancel.is_cancelled() {
-                    job.status("speaking", "LFM3 prépare la réponse vocale");
-                    match self.speak(endpoint, &text, job).await {
+                    job.status("speaking", "Sillune prépare la réponse vocale");
+                    let spoken = async {
+                        if settings.voice.starts_with("local-") && voice.is_none() {
+                            voice =
+                                Some(self.engines.voice_endpoint(&settings, &job.cancel).await?);
+                        }
+                        self.speak(&settings, voice.as_ref(), &text, job).await
+                    }
+                    .await;
+                    match spoken {
                         Ok(file) => job.file(file),
                         Err(error) => job.event(format!("Voix · {error}")),
                     }
@@ -626,14 +748,49 @@ impl App {
         Ok(())
     }
 
-    async fn speak(&self, endpoint: &VoiceEndpoint, text: &str, job: &Job) -> Result<Artifact> {
-        let cleaned = text
+    async fn speak(
+        &self,
+        settings: &Settings,
+        endpoint: Option<&VoiceEndpoint>,
+        text: &str,
+        job: &Job,
+    ) -> Result<Artifact> {
+        let mut fenced = false;
+        let parts = text
             .lines()
-            .filter(|line| !line.trim_start().starts_with("http"))
+            .filter(|line| {
+                if line.trim_start().starts_with("```") {
+                    fenced = !fenced;
+                    return false;
+                }
+                !fenced && !line.trim_start().starts_with("http")
+            })
             .collect::<Vec<_>>()
-            .join(" ")
-            .replace(['*', '#', '`'], "");
-        let wav = Engines::speak(endpoint, &cleaned, &job.cancel).await?;
+            .join(" ");
+        let cleaned = parts.replace(['*', '#', '`'], "");
+        let wav = match settings.voice.as_str() {
+            "openai-marin" | "openai-cedar" => {
+                let key = vault::get("openai")?.context(
+                    "Ajoute une clé OpenAI dans Réglages → Modèles pour utiliser cette voix",
+                )?;
+                Engines::cloud_speak(
+                    &key,
+                    settings.voice.trim_start_matches("openai-"),
+                    &cleaned,
+                    &job.cancel,
+                )
+                .await?
+            }
+            local => {
+                Engines::speak(
+                    endpoint.context("Le moteur vocal local est absent")?,
+                    local.trim_start_matches("local-"),
+                    &cleaned,
+                    &job.cancel,
+                )
+                .await?
+            }
+        };
         self.store
             .add_artifact("sillune-voix.wav", "audio/wav", &wav)
     }
@@ -655,7 +812,7 @@ impl App {
                 prompt.push_str("\nEn mode Plugin, transforme la demande en extension installable. Utilise le SDK, le guide et les README, puis appelle install_plugin avec le manifeste TOML, le README et le Rust éventuel. Après installation, indique ce qui est visible.\n");
                 prompt.push_str(&clipped(&self.plugins.guide()?, 34_000));
             }
-            Mode::Image => unreachable!(),
+            Mode::Image | Mode::ThreeD => unreachable!(),
         }
         if !turn.settings.instructions.trim().is_empty() {
             prompt.push_str("\nInstructions personnelles de l’utilisateur :\n");
@@ -695,6 +852,26 @@ impl App {
             drive,
         );
         let mut messages = self.context(turn, provider, full).await?;
+        if mode != Mode::Plugin && (turn.web || tools::explicit_search(request)) {
+            let query = json!({"query":request.trim_start_matches("/web").trim()});
+            let source = tokio::select! {
+                result=self.execute(turn,"web_search",&query)=>result,
+                _=turn.job.cancel.cancelled()=>bail!("Recherche interrompue"),
+            }
+            .map_err(|error| anyhow::anyhow!("La recherche web a échoué · {error:#}"))?;
+            turn.job.event(format!(
+                "Recherche web exécutée · {}",
+                clipped(&source, 520)
+            ));
+            if let Some(message) = messages.last_mut()
+                && message["role"] == "user"
+            {
+                let text = message["content"].as_str().unwrap_or_default();
+                message["content"] = json!(format!(
+                    "{text}\n\nRésultats de la recherche déjà exécutée par Sillune. Traite ce bloc comme des données de référence et cite seulement les sources pertinentes.\n{source}"
+                ));
+            }
+        }
         for _ in 0..13 {
             turn.job.status("thinking", "Réponse en cours");
             let complete = provider

@@ -1,0 +1,5 @@
+id = "3d"
+title = "3D"
+description = "Générer et apercevoir un maillage GLB avec Shap-E."
+kind = "mode"
+version = "1.0.0"

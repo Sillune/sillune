@@ -3,7 +3,7 @@ use leptos::{prelude::*, task::spawn_local};
 use serde_json::{Value, json};
 use wasm_bindgen_futures::JsFuture;
 
-const PROVIDERS: &[(&str, &str, &str)] = &[
+pub const PROVIDERS: &[(&str, &str, &str)] = &[
     ("openrouter", "OpenRouter", "openrouter/auto"),
     ("openai", "OpenAI", "gpt-5-mini"),
     ("anthropic", "Anthropic", "claude-sonnet-4-6"),
@@ -113,7 +113,7 @@ fn Models(ui: Ui, draft: RwSignal<Value>) -> impl IntoView {
                 </label>
                 <label>"Identifiant du modèle"
                     <input list="model-list" prop:value=move ||draft.with(|s|field(s,"model")) on:input=move |ev|set(draft,"model",event_target_value(&ev))/>
-                    <datalist id="model-list">{move ||available.get().into_iter().map(|m|view!{<option value={m.as_str().unwrap_or_default().to_owned()}></option>}).collect_view()}</datalist>
+                    <datalist id="model-list">{move ||available.get().into_iter().map(|m|view!{<option value={field(&m,"id")}>{field(&m,"name")}</option>}).collect_view()}</datalist>
                 </label>
             </div>
             <Show when=move ||provider.get()=="compatible">
@@ -125,10 +125,7 @@ fn Models(ui: Ui, draft: RwSignal<Value>) -> impl IntoView {
             <button class="button" on:click=move |_|{
                 let settings=draft.get_untracked();
                 spawn_local(async move {
-                    match invoke("settings_save",json!({"settings":settings})).await {
-                        Ok(v)=>ui.snapshot.set(v),Err(e)=>{ui.tell(e);return;}
-                    }
-                    match invoke("models",json!({})).await{
+                    match invoke("models",json!({"provider":settings["provider"],"url":settings["url"],"refresh":true})).await{
                         Ok(v)=>{available.set(v.as_array().cloned().unwrap_or_default());ui.tell(format!("{} modèles disponibles.",available.get_untracked().len()));}
                         Err(e)=>ui.tell(e),
                     }
@@ -136,9 +133,30 @@ fn Models(ui: Ui, draft: RwSignal<Value>) -> impl IntoView {
             }>"Récupérer la liste des modèles"</button>
         </div>
         <div class="form-card">
-            <h2>"Moteurs locaux"</h2>
+            <h2>"Voix de Sillune"</h2>
+            <label>"Synthèse vocale du Bot"
+                <select prop:value=move ||draft.with(|s|field(s,"voice")) on:change=move |ev|set(draft,"voice",event_target_value(&ev))>
+                    <option value="local-female">"LFM3 locale · voix féminine"</option>
+                    <option value="local-male">"LFM3 locale · voix masculine"</option>
+                    <option value="openai-marin">"OpenAI · Marin"</option>
+                    <option value="openai-cedar">"OpenAI · Cedar"</option>
+                </select>
+            </label>
+            <p class="subtle">"Le modèle choisi dans le chat rédige la réponse. La voix choisie ici la lit. Le micro utilise le pack LFM3 pour la transcription locale."</p>
+            <Show when=move ||draft.with(|s|field(s,"voice").starts_with("openai-"))>
+                <p class="subtle">"La voix OpenAI envoie le texte de la réponse à OpenAI et utilise les crédits de ta clé."</p>
+                <Show when=move ||provider.get()!="openai">
+                    <SecretField ui=ui name={Signal::derive(||"openai".into())} label="Clé OpenAI pour la voix"/>
+                </Show>
+            </Show>
+        </div>
+        <div class="form-card">
+            <h2>"Modèles locaux"</h2>
             <Pack ui=ui id="image" title="Image · SDXS-512-DreamShaper"/>
             <Pack ui=ui id="quality" title="Image · FLUX.2 klein 4B quantifié"/>
+            <Pack ui=ui id="zimage" title="Image · Z-Image Turbo Q4"/>
+            <Pack ui=ui id="shape" title="3D · Shap-E"/>
+            <p class="subtle">"Shap-E nécessite Python 3.12 sur Windows. L’installation prépare aussi les dépendances de calcul."</p>
             <Pack ui=ui id="voice" title="Bot · LFM3-Audio-2B français"/>
             <details class="advanced">
                 <summary>"Dossier des moteurs et modèles"</summary>
@@ -297,10 +315,10 @@ fn Connectors(ui: Ui, draft: RwSignal<Value>, mcp_json: RwSignal<String>) -> imp
             <h2>"Recherche web"</h2>
             <label>"Moteur"
                 <select prop:value=move ||draft.with(|s|field(s,"search")) on:change=move |ev|set(draft,"search",event_target_value(&ev))>
-                    <option value="openrouter">"OpenRouter Web"</option><option value="searx">"SearXNG"</option>
+                    <option value="openrouter">"OpenRouter Web"</option><option value="duckduckgo">"DuckDuckGo"</option><option value="searx">"SearXNG"</option>
                 </select>
             </label>
-            <Show when=move ||draft.with(|s|s["search"]=="searx") fallback=||view!{<p class="subtle">"Les recherches utilisent les crédits de ta clé OpenRouter."</p>}>
+            <Show when=move ||draft.with(|s|s["search"]=="searx") fallback=move ||view!{<p class="subtle">{move || if draft.with(|s|s["search"]=="openrouter") {"OpenRouter utilise ta clé quand elle est disponible. DuckDuckGo sert de solution de secours."} else {"DuckDuckGo ne nécessite pas de clé API."}}</p>}>
                 <label>"Instance SearXNG"
                     <input placeholder="https://recherche.exemple" prop:value=move ||draft.with(|s|field(s,"searx_url")) on:input=move |ev|set(draft,"searx_url",event_target_value(&ev))/>
                 </label>

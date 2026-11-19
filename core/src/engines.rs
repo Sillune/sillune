@@ -1,5 +1,5 @@
 use crate::{
-    provider,
+    mesh, provider,
     storage::Settings,
     tools::{clipped, quiet},
 };
@@ -40,7 +40,7 @@ struct Pack {
     license: String,
     folder: String,
     binary: String,
-    archive: Asset,
+    archive: Option<Asset>,
     files: Vec<Asset>,
 }
 
@@ -73,6 +73,7 @@ pub struct Engines {
     packs: BTreeMap<String, Pack>,
     voice: Mutex<Option<Voice>>,
     image: Mutex<Option<ImageServer>>,
+    render: Mutex<()>,
     download: Mutex<()>,
 }
 
@@ -88,6 +89,7 @@ impl Engines {
             packs: serde_json::from_str(include_str!("packs.json"))?,
             voice: Mutex::new(None),
             image: Mutex::new(None),
+            render: Mutex::new(()),
             download: Mutex::new(()),
         })
     }
@@ -105,25 +107,51 @@ impl Engines {
         self.roots(settings)
             .into_iter()
             .map(|r| r.join(&pack.folder).join(&pack.binary))
-            .find(|p| p.is_file())
+            .find(|p| p.is_file() && (pack.folder != "shape" || mesh::ready(p)))
     }
 
     fn model(&self, settings: &Settings, asset: &Asset) -> Option<PathBuf> {
         self.roots(settings)
             .into_iter()
             .map(|r| r.join("Models").join(&asset.file))
-            .find(|p| {
-                p.metadata()
-                    .is_ok_and(|m| m.is_file() && m.len() == asset.size)
+            .find(|path| asset_present(path, asset))
+    }
+
+    fn model_folder(&self, settings: &Settings, pack: &Pack) -> Option<PathBuf> {
+        self.roots(settings)
+            .into_iter()
+            .map(|root| root.join("Models"))
+            .find(|root| {
+                pack.files
+                    .iter()
+                    .all(|asset| asset_present(&root.join(&asset.file), asset))
             })
+    }
+
+    fn missing<'a>(&self, settings: &Settings, pack: &'a Pack) -> Vec<&'a Asset> {
+        if pack.folder == "shape" {
+            if self.model_folder(settings, pack).is_some() {
+                return Vec::new();
+            }
+            let local = self.root.join("Models");
+            return pack
+                .files
+                .iter()
+                .filter(|asset| !asset_present(&local.join(&asset.file), asset))
+                .collect();
+        }
+        pack.files
+            .iter()
+            .filter(|asset| self.model(settings, asset).is_none())
+            .collect()
     }
 
     pub fn status(&self, settings: &Settings) -> Value {
         let rows = self.packs.iter().map(|(id,p)| {
-            let missing = p.files.iter().filter(|a| self.model(settings, a).is_none()).map(|a|a.size).sum::<u64>();
+            let missing = self.missing(settings, p).iter().map(|a|a.size).sum::<u64>();
             let binary = self.binary(settings, p).is_some();
             (id.clone(),json!({"name":p.name,"license":p.license,"ready":missing == 0 && binary,
-                "missing":missing + if binary { 0 } else { p.archive.size },
+                "missing":missing + if binary { 0 } else { p.archive.as_ref().map_or(0, |a| a.size) },
                 "files":p.files.iter().map(|a| json!({"name":a.file,"url":a.url,"sha":a.sha,"size":a.size})).collect::<Vec<_>>()}))
         }).collect::<serde_json::Map<_,_>>();
         Value::Object(rows)
@@ -143,32 +171,32 @@ impl Engines {
         let pack = self.packs.get(id).context("Pack inconnu")?;
         fs::create_dir_all(self.root.join("Models"))?;
         let archive_needed = self.binary(settings, pack).is_none();
-        let missing = pack
-            .files
-            .iter()
-            .filter(|asset| self.model(settings, asset).is_none())
-            .collect::<Vec<_>>();
+        let missing = self.missing(settings, pack);
         let total = missing.iter().map(|a| a.size).sum::<u64>()
-            + if archive_needed { pack.archive.size } else { 0 };
+            + if archive_needed {
+                pack.archive.as_ref().map_or(0, |a| a.size)
+            } else {
+                0
+            };
         let mut done = 0u64;
         progress(0, total);
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(15))
             .timeout(Duration::from_secs(1500))
             .build()?;
-        if archive_needed {
-            let target = self.root.join(&pack.archive.file);
-            download_asset(&client, &pack.archive, &target, cancel, |n| {
-                progress(n, total)
-            })
-            .await?;
+        if let Some(archive) = pack.archive.as_ref().filter(|_| archive_needed) {
+            let target = self.root.join(&archive.file);
+            download_asset(&client, archive, &target, cancel, |n| progress(n, total)).await?;
             let dest = self.root.join(&pack.folder);
             let dest_clone = dest.clone();
             tokio::task::spawn_blocking(move || extract(&target, &dest_clone)).await??;
-            done += pack.archive.size;
+            done += archive.size;
+        } else if id == "shape" && archive_needed {
+            mesh::install(&self.root.join(&pack.folder), cancel).await?;
         }
         for asset in missing {
             let target = self.root.join("Models").join(&asset.file);
+            fs::create_dir_all(target.parent().context("Dossier de modèle manquant")?)?;
             download_asset(&client, asset, &target, cancel, |n| {
                 progress(done + n, total)
             })
@@ -192,14 +220,22 @@ impl Engines {
         if prompt.trim().is_empty() || prompt.len() > 6000 {
             bail!("Décris l’image en moins de 6 000 caractères");
         }
-        if ![384, 512, 640, 768].contains(&width) || ![384, 512, 640, 768].contains(&height) {
-            bail!("Dimensions incompatibles avec le profil rapide");
+        let steps = match profile {
+            "image" => 1,
+            "quality" => 4,
+            "zimage" => 8,
+            _ => bail!("Profil d’image inconnu"),
+        };
+        let quality = steps > 1;
+        let dimensions: &[u32] = if quality {
+            &[384, 512, 640, 768, 896, 1024]
+        } else {
+            &[384, 512, 640, 768]
+        };
+        if !dimensions.contains(&width) || !dimensions.contains(&height) {
+            bail!("Dimensions incompatibles avec ce modèle");
         }
-        let quality = profile == "quality";
         let pack = self.packs.get(profile).context("Profil d’image inconnu")?;
-        if !matches!(profile, "image" | "quality") {
-            bail!("Profil d’image inconnu");
-        }
         let binary = self
             .binary(settings, pack)
             .context("Installe le moteur d’image dans les réglages")?;
@@ -211,6 +247,10 @@ impl Engines {
                     .context("Installe le pack Image local")
             })
             .collect::<Result<Vec<_>>>()?;
+        let _render = tokio::select! {
+            guard = self.render.lock() => guard,
+            _ = cancel.cancelled() => bail!("Génération interrompue"),
+        };
         let mut slot = self.image.lock().await;
         if quality {
             self.close_voice().await;
@@ -233,6 +273,7 @@ impl Engines {
             quiet(&mut command)
                 .current_dir(binary.parent().context("Dossier du moteur indisponible")?)
                 .args([
+                    "--verbose",
                     "--listen-ip",
                     "127.0.0.1",
                     "--listen-port",
@@ -240,8 +281,8 @@ impl Engines {
                     "--cfg-scale",
                     "1",
                 ])
-                .stdout(log.reopen()?)
-                .stderr(log.reopen()?);
+                .stdout(fs::OpenOptions::new().append(true).open(log.path())?)
+                .stderr(fs::OpenOptions::new().append(true).open(log.path())?);
             if quality {
                 command
                     .arg("--diffusion-model")
@@ -250,14 +291,21 @@ impl Engines {
                     .arg(&weights[1])
                     .arg("--vae")
                     .arg(&weights[2])
-                    .args([
-                        "--steps",
-                        "4",
-                        "--sampling-method",
-                        "euler",
-                        "--max-vram",
-                        "8.5",
+                    .args(["--steps", &steps.to_string(), "--sampling-method", "euler"]);
+                if profile == "zimage" {
+                    command.args([
+                        "--offload-to-cpu",
+                        "--flash-attn",
+                        "auto,diffusion=on",
+                        "--vae-tiling",
+                        "--vae-tile-size",
+                        "512",
+                        "--vae-tile-overlap",
+                        "0.25",
                     ]);
+                } else {
+                    command.args(["--max-vram", "8.5"]);
+                }
             } else {
                 command.arg("-m").arg(&weights[0]).args(["--steps", "1"]);
             }
@@ -296,10 +344,19 @@ impl Engines {
         let server = slot.as_ref().context("Moteur d’image indisponible")?;
         let endpoint = format!("http://127.0.0.1:{}/sdapi/v1/txt2img", server.port);
         let work = async {
-            let result=provider::checked(client.post(endpoint).json(&json!({
-                "prompt":prompt,"seed":seed,"width":width,"height":height,"steps":if quality {4}else{1},
-                "cfg_scale":1,"sampler_name":if quality {"Euler"}else{"Euler a"},
-            })).send().await?).await?.json::<Value>().await?;
+            let result = provider::checked(
+                client
+                    .post(endpoint)
+                    .json(&json!({
+                        "prompt":prompt,"seed":seed,"width":width,"height":height,"steps":steps,
+                        "cfg_scale":1,"sampler_name":if quality {"Euler"}else{"Euler a"},
+                    }))
+                    .send()
+                    .await?,
+            )
+            .await?
+            .json::<Value>()
+            .await?;
             let encoded = result["images"][0]
                 .as_str()
                 .context("Le modèle n’a produit aucune image")?;
@@ -308,7 +365,7 @@ impl Engines {
             )
         };
         let result = tokio::select! {
-            value=tokio::time::timeout(Duration::from_secs(155),work)=>value.context("La génération a dépassé son délai").and_then(|v|v),
+            value=tokio::time::timeout(Duration::from_secs(240),work)=>value.context("La génération a dépassé son délai").and_then(|v|v),
             _=cancel.cancelled()=>Err(anyhow::anyhow!("Génération interrompue")),
         };
         let bytes = match result {
@@ -322,9 +379,34 @@ impl Engines {
             bail!("Image renvoyée invalide");
         }
         let vulkan = fs::read_to_string(slot.as_ref().unwrap().log.path()).is_ok_and(|log| {
-            log.contains("compute Vulkan") || log.contains("loaded Vulkan backend")
+            log.lines()
+                .any(|line| line.contains("compute buffer") && line.contains("on Vulkan"))
         });
         Ok((bytes, start.elapsed(), vulkan))
+    }
+
+    pub async fn mesh(
+        &self,
+        settings: &Settings,
+        prompt: &str,
+        seed: u32,
+        cancel: &CancellationToken,
+        status: impl Fn(&str),
+    ) -> Result<mesh::Generated> {
+        let pack = self.packs.get("shape").context("Pack 3D indisponible")?;
+        let python = self
+            .binary(settings, pack)
+            .context("Installe Shap-E dans Réglages → Modèles locaux")?;
+        let root = self
+            .model_folder(settings, pack)
+            .context("Les fichiers Shap-E doivent être installés dans le même dossier")?;
+        let _render = tokio::select! {
+            guard = self.render.lock() => guard,
+            _ = cancel.cancelled() => bail!("Génération interrompue"),
+        };
+        self.image.lock().await.take();
+        self.close_voice().await;
+        mesh::generate(&python, &root.join("shap-e"), prompt, seed, cancel, status).await
     }
 
     pub async fn voice_endpoint(
@@ -511,18 +593,39 @@ impl Engines {
 
     pub async fn speak(
         endpoint: &VoiceEndpoint,
+        voice: &str,
         input: &str,
         cancel: &CancellationToken,
     ) -> Result<Vec<u8>> {
         let client = provider::client()?;
         let request = client.post(format!("{}/audio/speech", endpoint.base)).bearer_auth(&endpoint.key)
-            .json(&json!({"model":"sillune-voice","voice":"female","lang":"fr","input":input.chars().take(700).collect::<String>(),
+            .json(&json!({"model":"sillune-voice","voice":voice,"lang":"fr","input":input.chars().take(700).collect::<String>(),
                 "response_format":"wav"}));
+        Self::speech_bytes(request, cancel).await
+    }
+
+    pub async fn cloud_speak(
+        key: &str,
+        voice: &str,
+        input: &str,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<u8>> {
+        let request = provider::client()?.post("https://api.openai.com/v1/audio/speech").bearer_auth(key)
+            .json(&json!({"model":"gpt-4o-mini-tts","voice":voice,"input":input.chars().take(3000).collect::<String>(),
+                "instructions":"Parle avec une voix naturelle et chaleureuse. Garde la langue du texte et une diction claire.",
+                "response_format":"wav"}));
+        Self::speech_bytes(request, cancel).await
+    }
+
+    async fn speech_bytes(
+        request: reqwest::RequestBuilder,
+        cancel: &CancellationToken,
+    ) -> Result<Vec<u8>> {
         let work = async {
             let response = provider::checked(request.send().await?).await?;
             let raw = response.bytes().await?.to_vec();
             if !raw.starts_with(b"RIFF") || raw.len() < 500 {
-                bail!("LFM3 a renvoyé un fichier audio invalide");
+                bail!("Le moteur vocal a renvoyé un fichier audio invalide");
             }
             Ok(raw)
         };
@@ -531,6 +634,11 @@ impl Engines {
             _=cancel.cancelled() => bail!("Voix interrompue"),
         }
     }
+}
+
+fn asset_present(path: &Path, asset: &Asset) -> bool {
+    path.metadata()
+        .is_ok_and(|meta| meta.is_file() && meta.len() == asset.size)
 }
 
 fn make_endpoint(voice: &Voice) -> VoiceEndpoint {
