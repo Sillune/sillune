@@ -220,6 +220,19 @@ impl App {
                 self.cancel(arg(&data, "session")?);
                 Ok(json!(true))
             }
+            "stop_render" => {
+                let session = data["session"].as_str().unwrap_or_default();
+                if self
+                    .store
+                    .sessions()?
+                    .iter()
+                    .any(|row| row.id == session && matches!(row.mode, Mode::Image | Mode::ThreeD))
+                {
+                    self.cancel(session);
+                }
+                self.engines.close_render().await;
+                Ok(json!(true))
+            }
             "approve" => {
                 let id = arg(&data, "id")?;
                 let choice = data["allow"].as_bool().context("Décision invalide")?;

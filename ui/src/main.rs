@@ -484,6 +484,7 @@ fn Composer(ui: Ui) -> impl IntoView {
                     </Show>
                     <Show when=move || matches!(ui.mode.get().as_str(),"image"|"3d")>
                         <input class="seed" type="number" min="0" placeholder="Graine" aria-label="Graine" prop:value=move || ui.seed.get() on:input=move |ev|ui.seed.set(event_target_value(&ev))/>
+                        <button class="button compact" on:click=move |_|ui.stop_render()>"Arrêter le modèle"</button>
                     </Show>
                     <Show when=move || ui.mode.get()=="bot">
                         <button class="button mic-button" class:listening=move || ui.mic.get() on:click=move |_|ui.microphone()>

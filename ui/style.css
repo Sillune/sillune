@@ -217,12 +217,12 @@ h1,h2,h3,p{margin-top:0}
 .picker-status{margin:3px 2px;color:var(--muted);font-size:11px;overflow-wrap:anywhere}
 .picker-manual{display:flex;justify-content:flex-end}
 .effort-popover{width:min(305px,calc(100vw - 34px));padding:13px 13px 10px;gap:9px;--level-fill:color-mix(in srgb,var(--accent-solid) 78%,#375ffc)}
-.effort-heading{position:relative;display:grid;min-height:39px;padding:0 31px;text-align:center}
+.effort-heading{position:relative;display:grid;grid-template-columns:minmax(0,1fr);min-height:43px;padding:0 31px;text-align:center}
 .effort-heading>div{min-width:0}
 .effort-heading>.iconbutton{position:absolute;right:0;top:0}
 .effort-heading small,.effort-heading strong{display:block}
-.effort-heading small{color:var(--muted);font-size:11px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.effort-heading strong{font-size:15px;letter-spacing:-.02em;margin-bottom:3px}
+.effort-heading small{color:var(--muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.effort-heading strong{font-size:17px;letter-spacing:-.02em;margin-bottom:3px}
 .effort-steps{position:relative;height:29px;display:grid;align-items:center}
 .effort-track{position:relative;isolation:isolate;overflow:hidden;display:flex;align-items:center;justify-content:space-between;height:23px;padding:0 11px;border:1px solid var(--edge);border-radius:999px;background:var(--hover)}
 .effort-track::before{content:"";position:absolute;inset:0 auto 0 0;width:calc(var(--progress) * (100% - 22px) + 11px);background:var(--level-fill);z-index:-1}

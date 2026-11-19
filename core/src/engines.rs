@@ -567,10 +567,15 @@ impl Engines {
         }
     }
 
-    pub async fn close(&self) {
+    pub async fn close_render(&self) {
+        let _render = self.render.lock().await;
         if let Some(mut server) = self.image.lock().await.take() {
-            let _ = server.child.start_kill();
+            let _ = server.child.kill().await;
         }
+    }
+
+    pub async fn close(&self) {
+        self.close_render().await;
         self.close_voice().await;
     }
 

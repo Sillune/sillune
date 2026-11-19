@@ -472,6 +472,16 @@ impl Ui {
         }
     }
 
+    pub fn stop_render(self) {
+        let session = self.session.get_untracked();
+        spawn_local(async move {
+            match invoke("stop_render", json!({"session":session})).await {
+                Ok(_) => self.tell("Modèle arrêté."),
+                Err(error) => self.tell(error),
+            }
+        });
+    }
+
     pub fn microphone(self) {
         if self.active() {
             return;
