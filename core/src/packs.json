@@ -83,6 +83,68 @@
       }
     ]
   },
+  "trellis": {
+    "name": "TRELLIS.2 4B Q8 · Vulkan",
+    "license": "https://huggingface.co/ilintar/trellis2-gguf",
+    "folder": "trellis",
+    "binary": "trellis-cli.exe",
+    "archive": {
+      "file": "trellis-vulkan-v0.8.1.zip",
+      "url": "https://github.com/pwilkin/trellis.cpp/releases/download/v0.8.1/trellis-vulkan-windows-x64.zip",
+      "sha": "d6c70678635f5367f9aa93261e9310e7c0c327ca8395399cf2ef869ccc2e72ba",
+      "size": 14131887
+    },
+    "files": [
+      {
+        "file": "trellis2-q8/birefnet.gguf",
+        "url": "https://huggingface.co/ilintar/trellis2-gguf/resolve/a57397bd3d351599d9729fc144b3f87c3f87d65b/q8/birefnet.gguf",
+        "sha": "10c5dd4dcac904cf81c9a16180eb66f167dd52ab55867f54a44567b0b2babbc1",
+        "size": 882749024
+      },
+      {
+        "file": "trellis2-q8/dinov3.gguf",
+        "url": "https://huggingface.co/ilintar/trellis2-gguf/resolve/a57397bd3d351599d9729fc144b3f87c3f87d65b/q8/dinov3.gguf",
+        "sha": "0dd4ffd4b46a248f5b7d49c35275d68461fbf73f57ddb4c1fa8afb4f7bb45a0d",
+        "size": 323657920
+      },
+      {
+        "file": "trellis2-q8/shape_dec.gguf",
+        "url": "https://huggingface.co/ilintar/trellis2-gguf/resolve/a57397bd3d351599d9729fc144b3f87c3f87d65b/q8/shape_dec.gguf",
+        "sha": "0de7c7a675022dd8696d526a9279e5a50b2a35c8a79452f434a72dc53d40f169",
+        "size": 881361568
+      },
+      {
+        "file": "trellis2-q8/shape_flow_512.gguf",
+        "url": "https://huggingface.co/ilintar/trellis2-gguf/resolve/a57397bd3d351599d9729fc144b3f87c3f87d65b/q8/shape_flow_512.gguf",
+        "sha": "29b639f4ff22ded8f91b619376a835f64b9874b0ebcadb9ac6c305195bf5d1f9",
+        "size": 1376125952
+      },
+      {
+        "file": "trellis2-q8/ss_dec.gguf",
+        "url": "https://huggingface.co/ilintar/trellis2-gguf/resolve/a57397bd3d351599d9729fc144b3f87c3f87d65b/q8/ss_dec.gguf",
+        "sha": "2790b5eecb261cc877d9bf175ce2bd6dd48cd65be8c042c5f5bc023dfca01cf7",
+        "size": 147379392
+      },
+      {
+        "file": "trellis2-q8/ss_flow.gguf",
+        "url": "https://huggingface.co/ilintar/trellis2-gguf/resolve/a57397bd3d351599d9729fc144b3f87c3f87d65b/q8/ss_flow.gguf",
+        "sha": "ea6d8a42b20661a5c6a52e5ffbdc1df7aca9b212792193873b418c69f871422c",
+        "size": 1376059040
+      },
+      {
+        "file": "trellis2-q8/tex_dec.gguf",
+        "url": "https://huggingface.co/ilintar/trellis2-gguf/resolve/a57397bd3d351599d9729fc144b3f87c3f87d65b/q8/tex_dec.gguf",
+        "sha": "88b4fced46455e02f316664d5c43584a311921dd9a1cdc1b7b7d981cca9214d4",
+        "size": 881344576
+      },
+      {
+        "file": "trellis2-q8/tex_flow_512.gguf",
+        "url": "https://huggingface.co/ilintar/trellis2-gguf/resolve/a57397bd3d351599d9729fc144b3f87c3f87d65b/q8/tex_flow_512.gguf",
+        "sha": "389a2cbdda59d53b21e5989650d9d36b7ac603266eaef06712cd07a9fc377210",
+        "size": 1376178176
+      }
+    ]
+  },
   "shape": {
     "name": "Shap-E · Texte vers 3D",
     "license": "https://huggingface.co/openai/shap-e",

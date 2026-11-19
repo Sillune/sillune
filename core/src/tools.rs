@@ -463,6 +463,9 @@ pub fn hash(data: &[u8]) -> String {
 pub async fn search(settings: &Settings, query: &str) -> Result<String> {
     let client = provider::client()?;
     let query = clipped(query, 500);
+    if query.trim().is_empty() {
+        bail!("La recherche a besoin de quelques mots");
+    }
     if settings.search == "searx" {
         let base = provider::trusted_endpoint(&settings.searx_url)?;
         let endpoint = if base.path().trim_end_matches('/').ends_with("/search") {
@@ -485,20 +488,19 @@ pub async fn search(settings: &Settings, query: &str) -> Result<String> {
             .into_iter()
             .flatten()
             .take(6)
-            .map(|r| {
-                format!(
+            .filter_map(|r| {
+                Some(format!(
                     "{}\n{}\n{}",
                     r["title"].as_str().unwrap_or_default(),
-                    r["url"].as_str().unwrap_or_default(),
+                    web_url(r["url"].as_str()?)?,
                     clipped(r["content"].as_str().unwrap_or_default(), 300)
-                )
+                ))
             })
             .collect::<Vec<_>>();
-        return Ok(if results.is_empty() {
-            "Aucun résultat.".into()
-        } else {
-            results.join("\n\n")
-        });
+        if results.is_empty() {
+            bail!("SearXNG n’a renvoyé aucune source");
+        }
+        return Ok(results.join("\n\n"));
     }
     let key = vault::get("openrouter")?.filter(|key| !key.is_empty());
     if settings.search == "duckduckgo" || key.is_none() {
@@ -534,7 +536,7 @@ pub async fn search(settings: &Settings, query: &str) -> Result<String> {
         {
             count += 1;
             text.push_str(&format!(
-                "\n{} · {url}",
+                "\n{}\n{url}",
                 cite["title"].as_str().unwrap_or("Source")
             ));
         }
@@ -546,9 +548,36 @@ pub async fn search(settings: &Settings, query: &str) -> Result<String> {
 }
 
 async fn public_search(client: &Client, query: &str) -> Result<String> {
+    let result = duckduckgo(client, query, false).await;
+    if result.as_ref().is_ok_and(|sources| !sources.is_empty()) {
+        return result;
+    }
+    let result = duckduckgo(client, query, true).await?;
+    if result.is_empty() {
+        bail!(
+            "DuckDuckGo n’a renvoyé aucune source lisible. Essaie une requête plus courte ou consulte Réglages → Connecteurs."
+        );
+    }
+    Ok(result)
+}
+
+fn web_url(url: &str) -> Option<Url> {
+    let parsed = Url::parse(url).ok()?;
+    (matches!(parsed.scheme(), "https" | "http")
+        && parsed.host().is_some()
+        && parsed.username().is_empty()
+        && parsed.password().is_none())
+    .then_some(parsed)
+}
+
+async fn duckduckgo(client: &Client, query: &str, lite: bool) -> Result<String> {
     let response = provider::checked(
         client
-            .get("https://html.duckduckgo.com/html/")
+            .get(if lite {
+                "https://lite.duckduckgo.com/lite/"
+            } else {
+                "https://html.duckduckgo.com/html/"
+            })
             .query(&[("q", query)])
             .timeout(Duration::from_secs(18))
             .send()
@@ -557,6 +586,21 @@ async fn public_search(client: &Client, query: &str) -> Result<String> {
     .await?;
     let markup = response.text().await?;
     let html = Html::parse_document(&markup);
+    if lite {
+        let selector = Selector::parse("a.result-link").unwrap();
+        return Ok(html
+            .select(&selector)
+            .filter_map(|link| {
+                let url = duckduckgo_link(link.value().attr("href")?)?;
+                Some(format!(
+                    "{}\n{url}",
+                    link.text().collect::<Vec<_>>().join(" ")
+                ))
+            })
+            .take(6)
+            .collect::<Vec<_>>()
+            .join("\n\n"));
+    }
     let result = Selector::parse(".result__body").unwrap();
     let anchor = Selector::parse(".result__a").unwrap();
     let snippet = Selector::parse(".result__snippet").unwrap();
@@ -564,21 +608,7 @@ async fn public_search(client: &Client, query: &str) -> Result<String> {
         .select(&result)
         .filter_map(|row| {
             let link = row.select(&anchor).next()?;
-            let href = link.value().attr("href")?;
-            let url = if href.starts_with("//") && href.contains("duckduckgo.com/l/?") {
-                Url::parse(&format!("https:{href}"))
-                    .ok()?
-                    .query_pairs()
-                    .find(|(k, _)| k == "uddg")?
-                    .1
-                    .into_owned()
-            } else {
-                href.to_owned()
-            };
-            let parsed = Url::parse(&url).ok()?;
-            if !matches!(parsed.scheme(), "http" | "https") {
-                return None;
-            }
+            let url = duckduckgo_link(link.value().attr("href")?)?;
             let title = link.text().collect::<Vec<_>>().join(" ");
             let summary = row
                 .select(&snippet)
@@ -589,12 +619,37 @@ async fn public_search(client: &Client, query: &str) -> Result<String> {
         })
         .take(6)
         .collect::<Vec<_>>();
-    if sources.is_empty() {
-        bail!(
-            "DuckDuckGo n’a renvoyé aucune source lisible. Tu peux choisir OpenRouter ou SearXNG dans Réglages → Connecteurs."
-        );
-    }
     Ok(sources.join("\n\n"))
+}
+
+fn duckduckgo_link(input: &str) -> Option<Url> {
+    let url = Url::parse("https://duckduckgo.com/")
+        .ok()?
+        .join(input)
+        .ok()?;
+    if url
+        .host_str()
+        .is_some_and(|host| host == "duckduckgo.com" || host.ends_with(".duckduckgo.com"))
+        && url.path() == "/l/"
+    {
+        let target = url.query_pairs().find(|(key, _)| key == "uddg")?.1;
+        return web_url(&target);
+    }
+    web_url(url.as_str())
+}
+
+pub fn search_markdown(source: &str) -> String {
+    source
+        .lines()
+        .map(|line| {
+            if let Some(url) = web_url(line.trim()) {
+                format!("<{url}>")
+            } else {
+                line.to_owned()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub fn explicit_search(request: &str) -> bool {
@@ -609,7 +664,9 @@ pub fn explicit_search(request: &str) -> bool {
         r"(?i)\b(?:sans\s+(?:faire\s+)?(?:de\s+)?recherche\s+(?:web|en\s+ligne)|ne\s+(?:recherche|cherche|navigue)\s+pas|do\s+not\s+(?:search|browse))\b"
     ).unwrap()
     });
-    WEB.is_match(request.trim()) && !OPT_OUT.is_match(request)
+    (WEB.is_match(request.trim())
+        || crate::weather::is_weather(request) && !requested_action(Mode::Chat, request))
+        && !OPT_OUT.is_match(request)
 }
 
 pub fn desktop_target(request: &str) -> bool {
@@ -626,14 +683,25 @@ pub fn empty_text_request(request: &str) -> Option<String> {
     use std::sync::LazyLock;
     static EMPTY: LazyLock<regex::Regex> = LazyLock::new(|| {
         regex::Regex::new(
-        r"(?i)^\s*(?:(?:stp|s'il te plaît|peux[- ]tu|tu peux|please|can you)\s+)?(?:cr[ée]e(?:r|[- ]moi)?|fais(?:[- ]moi)?|ajoute|cr[ée]ez|create|make)\s+(?:moi\s+)?(?:un|une|a|an)\s+(?:nouveau\s+)?(?:fichier(?:\s+(?:texte|txt|\.txt))?\s+(?:vide|sans contenu)|(?:empty|blank)\s+(?:text\s+)?file)\b"
+        r"(?i)^\s*(?:(?:stp|s'il te plaît|peux[- ]tu|tu peux|pourrais[- ]tu|please|can you)\s+)?(?:cr[ée]e(?:r|[- ]moi)?|fai[st](?:[- ]moi)?|ajoute|cr[ée]ez|create|make)\s+(?:moi\s+)?(?:un|une|a|an)\s+(?:nouveau\s+)?(?:fichier(?:\s+(?:texte|txt|\.txt))?\s+(?:vide|sans contenu)|(?:empty|blank)\s+(?:text\s+)?file)\b"
     ).unwrap()
     });
     static NAME: LazyLock<regex::Regex> = LazyLock::new(|| {
         regex::Regex::new(r#"(?i)["«`]\s*([^"»`\r\n]+\.txt)\s*["»`]|([\p{L}\p{N}_.-]+\.txt)\b"#)
             .unwrap()
     });
-    if request.lines().count() > 1 || request.contains(['?', ';']) || !EMPTY.is_match(request) {
+    static NAMED: LazyLock<regex::Regex> = LazyLock::new(|| {
+        regex::Regex::new(
+        r#"(?i)^\s*(?:(?:peux[- ]tu|tu peux|pourrais[- ]tu)\s+)?(?:cr[ée]e(?:r|[- ]moi)?|fai[st](?:[- ]moi)?|create)\s+(?:(?:un|le|a)\s+(?:fichier|file)\s+)?(?:nomm[ée]\s+)?["«`]?\s*([\p{L}\p{N}_.-]+\.(?:txt|md|csv|html))\s*["»`]?\s+(?:sur\s+(?:mon|le)\s+bureau|on\s+(?:my|the)\s+desktop)\s*[.!]?\s*$"#
+    ).unwrap()
+    });
+    if request.lines().count() > 1 || request.contains(['?', ';']) {
+        return None;
+    }
+    if let Some(name) = NAMED.captures(request).and_then(|entry| entry.get(1)) {
+        return Some(name.as_str().to_owned());
+    }
+    if !EMPTY.is_match(request) {
         return None;
     }
     let lower = request.to_lowercase();
@@ -660,7 +728,7 @@ pub fn requested_action(mode: Mode, request: &str) -> bool {
     use std::sync::LazyLock;
     static ACTION: LazyLock<regex::Regex> = LazyLock::new(|| {
         regex::Regex::new(
-        r"(?i)^\s*(?:(?:peux[- ]tu|tu peux|j'aimerais que tu|merci de|please|can you)\s+)?(?:cr[ée]e(?:r|[- ]moi)?|[ée]cris|[ée]crit|modifi(?:e|er)|ajoute|supprime|ouvre|lis|liste|g[ée]n[èe]re|pr[ée]pare|enregistre|installe|ex[ée]cute|lance|create|make|write|edit|open|read|list|remove|run|install|delete)\b"
+        r"(?i)^\s*(?:(?:peux[- ]tu|tu peux|pourrais[- ]tu|j'aimerais que tu|merci de|please|can you)\s+)?(?:cr[ée]e(?:r|[- ]moi)?|fai[st](?:[- ]moi)?|[ée]cris|[ée]crit|modifi(?:e|er)|ajoute|supprime|ouvre|lis|liste|g[ée]n[èe]re|pr[ée]pare|enregistre|installe|ex[ée]cute|lance|create|make|write|edit|open|read|list|remove|run|install|delete)\b"
     ).unwrap()
     });
     let lower = request.to_lowercase();
@@ -684,6 +752,10 @@ pub fn requested_action(mode: Mode, request: &str) -> bool {
             "projet",
             "project",
             "html",
+            ".txt",
+            ".md",
+            ".json",
+            ".csv",
         ]
         .iter()
         .any(|word| lower.contains(word))

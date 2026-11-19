@@ -136,8 +136,24 @@ impl Engines {
             })
     }
 
+    pub fn reference_model(&self, settings: &Settings) -> Option<&'static str> {
+        ["zimage", "quality", "image"].into_iter().find(|id| {
+            let pack = &self.packs[*id];
+            self.binary(settings, pack).is_some() && self.missing(settings, pack).is_empty()
+        })
+    }
+
+    pub fn require_trellis(&self, settings: &Settings) -> Result<(PathBuf, PathBuf)> {
+        let pack = &self.packs["trellis"];
+        let binary = self.binary(settings, pack);
+        let models = self.model_folder(settings, pack);
+        binary
+            .zip(models)
+            .context("Installe TRELLIS.2 dans Réglages → Modèles locaux")
+    }
+
     fn missing<'a>(&self, settings: &Settings, pack: &'a Pack) -> Vec<&'a Asset> {
-        if pack.folder == "shape" {
+        if matches!(pack.folder.as_str(), "shape" | "trellis") {
             if self.model_folder(settings, pack).is_some() {
                 return Vec::new();
             }
@@ -201,7 +217,7 @@ impl Engines {
             tokio::task::spawn_blocking(move || extract(&target, &dest_clone)).await??;
             done += archive.size;
         } else if id == "shape" && archive_needed {
-            mesh::install(&self.root.join(&pack.folder), cancel, status).await?;
+            mesh::install(&self.root.join(&pack.folder), cancel, &status).await?;
         }
         for asset in missing {
             let target = self.root.join("Models").join(&asset.file);
@@ -417,6 +433,32 @@ impl Engines {
         self.image.lock().await.take();
         self.close_voice().await;
         mesh::generate(&python, &root.join("shap-e"), prompt, seed, cancel, status).await
+    }
+
+    pub async fn mesh_photo(
+        &self,
+        settings: &Settings,
+        photo: &[u8],
+        seed: u32,
+        cancel: &CancellationToken,
+        status: impl Fn(&str),
+    ) -> Result<mesh::Generated> {
+        let (binary, models) = self.require_trellis(settings)?;
+        let _render = tokio::select! {
+            guard = self.render.lock() => guard,
+            _ = cancel.cancelled() => bail!("Génération interrompue"),
+        };
+        self.image.lock().await.take();
+        self.close_voice().await;
+        crate::trellis::generate(
+            &binary,
+            &models.join("trellis2-q8"),
+            photo,
+            seed,
+            cancel,
+            status,
+        )
+        .await
     }
 
     pub async fn voice_endpoint(

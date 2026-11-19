@@ -95,7 +95,7 @@ fn Sidebar(ui: Ui) -> impl IntoView {
                 <Show when=move || ui.setting("mode_navigation")!="header">
                     <button class="nav-row more-modes" aria-expanded=move ||expanded.get().to_string()
                         on:click=move |_|expanded.update(|value|*value=!*value)>
-                        <span class="nav-icon" aria-hidden="true">{move || if expanded.get() {"⌃"} else {"⌄"}}</span>
+                        <span class="nav-icon" aria-hidden="true"><span class="chevron"></span></span>
                         {move || if expanded.get() {"Réduire les modes"} else {"Autres modes"}}
                     </button>
                 </Show>
@@ -175,13 +175,13 @@ fn Header(ui: Ui, now: RwSignal<f64>) -> impl IntoView {
             }}</div>}>
                 <label class="mode-picker">
                     <span>"Mode"</span>
-                    <select aria-label="Sélecteur de mode" prop:value=move ||ui.mode.get()
+                    <span class="select-chevron"><select aria-label="Sélecteur de mode" prop:value=move ||ui.mode.get()
                       on:change=move |ev| {
                         let chosen = event_target_value(&ev);
                         if !ui.active() { ui.select_mode(&chosen); }
                       } disabled=move ||ui.active()>
                         {MODES.iter().map(|(mode,label,_)|view!{<option hidden=move ||!ui.mode_available(mode) value=*mode>{*label}</option>}).collect_view()}
-                    </select>
+                    </select><span class="chevron" aria-hidden="true"></span></span>
                 </label>
             </Show>
             <Show when=move || ui.panel.get()=="conversation">
@@ -192,17 +192,17 @@ fn Header(ui: Ui, now: RwSignal<f64>) -> impl IntoView {
                     <i class="status-dot" class:connected=move || ui.snapshot.with(|s| {
                         let provider=ui.selected("provider");
                         if ui.mode.get()=="image" {s["packs"][ui.image_profile.get()]["ready"]==true}
-                        else if ui.mode.get()=="3d" {s["packs"]["shape"]["ready"]==true}
+                        else if ui.mode.get()=="3d" {s["packs"][ui.mesh_profile.get()]["ready"]==true}
                         else {s["secrets"][provider]==true || ui.selected("provider")=="compatible"}
                     })></i>
                     <span>{move || match ui.mode.get().as_str() {
                         "image"=>match ui.image_profile.get().as_str() {"quality"=>"FLUX.2 · Local".into(),"zimage"=>"Z-Image Turbo · Local".into(),_=>"SDXS · Local".into()},
-                        "3d"=>"Shap-E · Local".into(),
+                        "3d"=>if ui.mesh_profile.get()=="shape" {"Shap-E · Local"} else {"TRELLIS.2 · Local"}.into(),
                         _=>{
                             let model=ui.selected("model");
                             if model.is_empty(){"Choisir un modèle".into()}else{model}
                         }
-                    }}</span><small>"⌄"</small>
+                    }}</span><span class="chevron" aria-hidden="true"></span>
                 </button>
             </Show>
             <div class="top-actions">
@@ -286,6 +286,14 @@ fn Conversation(ui: Ui) -> impl IntoView {
                             </div>
                         </div>
                     </Show>
+                    <Show when=move || ui.job.with(|j|j["done"]==true && j["error"].as_str().is_some_and(|s|!s.is_empty()))>
+                        <aside class="turn-error" role="alert">
+                            <p>{move ||ui.job.with(|j|field(j,"error"))}</p>
+                            <Show when=move ||ui.job.with(|j|j["credentials"]==true)>
+                                <button class="button compact" on:click=move |_|ui.settings("models")>"Ouvrir les réglages du fournisseur"</button>
+                            </Show>
+                        </aside>
+                    </Show>
                     <Show when={move || ui.job.with(|j|!list(j,"events").is_empty() || j["usage"]["input"].as_u64().unwrap_or(0)>0)}>
                         <details class="events">
                             <summary>"Détail du tour" <span>{move || ui.job.with(|j| {
@@ -335,7 +343,7 @@ fn Welcome(ui: Ui) -> impl IntoView {
         ),
         "3d" => (
             "Crée un objet en 3D.",
-            "Décris la forme, les couleurs et les détails. Le résultat s’ouvre en GLB.",
+            "Décris un objet ou joins une image. Le résultat s’ouvre en GLB.",
             "Petit robot",
             "A small red toy robot with a round head and two blue eyes",
             "Objet stylisé",
@@ -431,8 +439,10 @@ fn Composer(ui: Ui) -> impl IntoView {
                     on:keydown=move |ev:web_sys::KeyboardEvent|if ev.key()=="Enter" && !ev.shift_key() && !ev.is_composing(){ev.prevent_default();ui.send(None);}>
                 </textarea>
                 <div class="composer-tools">
-                    <Show when=move || !matches!(ui.mode.get().as_str(),"image"|"3d")>
-                        <button class="iconbutton" aria-label="Joindre un fichier" on:click=move |_|ui.attach()>"＋"</button>
+                    <Show when=move || ui.mode.get()!="image" && (ui.mode.get()!="3d" || ui.mesh_profile.get()=="trellis")>
+                        <button class="iconbutton" aria-label=move || if ui.mode.get()=="3d" {"Joindre une image PNG ou JPEG"} else {"Joindre un fichier"}
+                            title=move || if ui.mode.get()=="3d" {"Joindre une image PNG ou JPEG"} else {"Joindre un fichier"}
+                            on:click=move |_|ui.attach()>"＋"</button>
                     </Show>
                     <Show when=move || matches!(ui.mode.get().as_str(),"chat"|"agent"|"bot")>
                         <button class="picker-button web-toggle" class:current=move ||ui.web.get()
@@ -451,15 +461,26 @@ fn Composer(ui: Ui) -> impl IntoView {
                         </select>
                     </Show>
                     <Show when=move || ui.mode.get()=="image">
-                        <select class="flat-select" aria-label="Modèle d’image" prop:value=move ||ui.image_profile.get() on:change=move |ev|ui.image_profile.set(event_target_value(&ev))>
+                        <span class="select-chevron"><select class="flat-select" aria-label="Modèle d’image" prop:value=move ||ui.image_profile.get() on:change=move |ev|ui.image_profile.set(event_target_value(&ev))>
                             <option value="image">"Rapide · SDXS"</option><option value="quality">"Qualité · FLUX.2"</option>
                             <option value="zimage">"Z-Image Turbo"</option>
-                        </select>
+                        </select><span class="chevron" aria-hidden="true"></span></span>
                         <select class="flat-select" aria-label="Format de l’image" prop:value=move ||ui.size.get() on:change=move |ev|ui.size.set(event_target_value(&ev))>
                             <option value="square">"Carré"</option><option value="wide">"Paysage"</option><option value="tall">"Portrait"</option>
                             <option value="medium_square">"Carré 768 px"</option>
                             <option value="large" disabled=move ||ui.image_profile.get()=="image">"Carré 1024 px"</option>
                         </select>
+                    </Show>
+                    <Show when=move || ui.mode.get()=="3d">
+                        <span class="select-chevron"><select class="flat-select" aria-label="Modèle 3D" prop:value=move ||ui.mesh_profile.get()
+                            on:change=move |ev| {
+                                let model=event_target_value(&ev);
+                                if model=="shape" {ui.attachments.set(Vec::new());}
+                                ui.mesh_profile.set(model);
+                            }>
+                            <option value="trellis">"TRELLIS.2"</option>
+                            <option value="shape">"Shap-E"</option>
+                        </select><span class="chevron" aria-hidden="true"></span></span>
                     </Show>
                     <Show when=move || matches!(ui.mode.get().as_str(),"image"|"3d")>
                         <input class="seed" type="number" min="0" placeholder="Graine" aria-label="Graine" prop:value=move || ui.seed.get() on:input=move |ev|ui.seed.set(event_target_value(&ev))/>
@@ -478,7 +499,9 @@ fn Composer(ui: Ui) -> impl IntoView {
                         <model_picker::ModelPicker ui=ui/>
                     </Show>
                     <Show when=move || ui.active() || ui.playing.get() fallback=move || view!{
-                        <button class="send" aria-label="Envoyer" disabled=move || ui.composer.with(|s|s.trim().is_empty()) on:click=move |_|ui.send(None)>"↑"</button>
+                        <button class="send" aria-label="Envoyer" disabled=move || ui.composer.with(|s|s.trim().is_empty())
+                            && !(ui.mode.get()=="3d" && ui.mesh_profile.get()=="trellis" && !ui.attachments.with(Vec::is_empty))
+                            on:click=move |_|ui.send(None)>"↑"</button>
                     }>
                         <button class="send stop" aria-label="Arrêter" on:click=move |_|ui.cancel()>"■"</button>
                     </Show>

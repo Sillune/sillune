@@ -78,6 +78,14 @@ async fn answer(mut socket: TcpStream) -> anyhow::Result<()> {
         return Ok(());
     }
     let body: Value = serde_json::from_slice(&request[start..start + bytes]).unwrap_or(Value::Null);
+    if body["model"] == "fixture-refused" {
+        socket
+            .write_all(
+                b"HTTP/1.1 401 Unauthorized\r\ncontent-length: 0\r\nconnection: close\r\n\r\n",
+            )
+            .await?;
+        return Ok(());
+    }
     let messages = body["messages"].as_array();
     let latest = messages
         .and_then(|m| m.last())
@@ -231,6 +239,28 @@ async fn creates_empty_desktop_file_with_permission_and_no_provider() {
         std::fs::read(desktop.join("Fichier vide.txt")).unwrap(),
         b""
     );
+    app.dispatch(
+        "start",
+        json!({"session":agent,"text":"Fait un fichier test.md sur mon bureau"}),
+    )
+    .await
+    .unwrap();
+    let pending = poll(&app, &agent, |v| v["approval"].is_object()).await;
+    assert!(
+        pending["approval"]["detail"]
+            .as_str()
+            .unwrap()
+            .contains("Bureau → test.md")
+    );
+    app.dispatch(
+        "approve",
+        json!({"id":pending["approval"]["id"],"allow":true}),
+    )
+    .await
+    .unwrap();
+    let created = poll(&app, &agent, |v| v["done"] == true).await;
+    assert_eq!(created["error"], "");
+    assert_eq!(std::fs::read(desktop.join("test.md")).unwrap(), b"");
     app.dispatch("start", json!({"session":agent,"text":prompt}))
         .await
         .unwrap();
@@ -304,7 +334,7 @@ async fn discovers_models_runs_web_without_native_tools_and_keeps_chat_preferenc
         })
         .unwrap();
     let snapshot = app.dispatch("snapshot", json!({})).await.unwrap();
-    for pack in ["image", "quality", "zimage", "shape", "voice"] {
+    for pack in ["image", "quality", "zimage", "shape", "trellis", "voice"] {
         assert_eq!(snapshot["packs"][pack]["ready"], false);
     }
     assert!(!tmp.path().join("profile/runtime").exists());
@@ -342,6 +372,23 @@ async fn discovers_models_runs_web_without_native_tools_and_keeps_chat_preferenc
         .unwrap();
     assert_eq!(history["preferences"]["effort"], 5);
     assert_eq!(app.store.settings().unwrap().model, "fixture");
+    app.dispatch(
+        "start",
+        json!({"session":chat,
+        "text":"Cherche des sources en ligne sur les robots.",
+        "selection":{"provider":"compatible","model":"fixture-refused"}}),
+    )
+    .await
+    .unwrap();
+    let refused = poll(&app, &chat, |v| v["done"] == true).await;
+    assert_eq!(refused["credentials"], true);
+    assert!(refused["error"].as_str().unwrap().contains("HTTP 401"));
+    assert!(
+        refused["text"]
+            .as_str()
+            .unwrap()
+            .contains("<https://example.org/robot>")
+    );
     let independent = session(&app, "chat").await;
     app.dispatch(
         "start",
@@ -676,7 +723,7 @@ async fn optional_zimage_and_3d() {
     app.dispatch(
         "start",
         json!({"session":mesh,
-        "text":"A small red robot with a round head and two blue eyes","seed":42}),
+        "text":"A small red robot with a round head and two blue eyes","seed":42,"mesh_profile":"shape"}),
     )
     .await
     .unwrap();

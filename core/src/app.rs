@@ -7,7 +7,7 @@ use crate::{
     storage::{Artifact, Message, Mode, Settings, Store, contains_secret},
     themes,
     tools::{self, Effect, Workspace, arg, clipped},
-    vault,
+    vault, weather,
 };
 use anyhow::{Context, Result, bail};
 use base64::{Engine as _, engine::general_purpose::STANDARD};
@@ -39,6 +39,7 @@ struct View {
     files: Vec<Artifact>,
     progress: f64,
     voice: bool,
+    credentials: bool,
 }
 
 #[derive(Clone, Serialize)]
@@ -531,8 +532,13 @@ impl App {
         if text.len() > 28_000 || contains_secret(text) {
             bail!("Utilise les réglages pour les clés et limite le message à 28 000 caractères");
         }
-        if text.is_empty() && !(session.mode == Mode::Bot && data["pcm"].is_string()) {
-            bail!("Écris ou dicte un message");
+        let audio = session.mode == Mode::Bot && data["pcm"].is_string();
+        let photo = session.mode == Mode::ThreeD
+            && data["attachments"]
+                .as_array()
+                .is_some_and(|files| !files.is_empty());
+        if text.is_empty() && !audio && !photo {
+            bail!("Écris un message ou joins une image en mode 3D");
         }
         let job = self.job(&session.id, "thinking")?;
         let app = self.clone();
@@ -558,7 +564,10 @@ impl App {
     }
 
     fn download(self: &Arc<Self>, pack: &str) -> Result<Value> {
-        if !matches!(pack, "voice" | "image" | "quality" | "zimage" | "shape") {
+        if !matches!(
+            pack,
+            "voice" | "image" | "quality" | "zimage" | "shape" | "trellis"
+        ) {
             bail!("Pack inconnu");
         }
         let app = self.clone();
@@ -659,13 +668,37 @@ impl App {
             request = Engines::transcribe(endpoint, &STANDARD.decode(pcm)?, &job.cancel).await?;
             job.event(format!("Voix reconnue · {}", clipped(&request, 250)));
         }
-        let attach = data["attachments"]
+        let attachments = data["attachments"]
             .as_array()
             .into_iter()
             .flatten()
             .take(6)
-            .filter_map(|id| self.store.artifact(id.as_str()?).ok().map(|p| p.0))
-            .collect::<Vec<_>>();
+            .filter_map(Value::as_str);
+        let profile = data["mesh_profile"].as_str().unwrap_or("trellis");
+        let mut photo = None;
+        let attach = if mode == Mode::ThreeD {
+            let files = attachments.collect::<Vec<_>>();
+            match files.as_slice() {
+                [] if !request.is_empty() => Vec::new(),
+                [id] if profile == "trellis" => {
+                    let (artifact, bytes) = self.store.artifact(id).context("Image introuvable")?;
+                    if !matches!(artifact.media.as_str(), "image/png" | "image/jpeg") {
+                        bail!("Joins une image PNG ou JPEG");
+                    }
+                    photo = Some(bytes);
+                    vec![artifact]
+                }
+                [_] if profile == "shape" => {
+                    bail!("Sélectionne TRELLIS.2 pour convertir une image")
+                }
+                [] => bail!("Décris un objet ou joins une image PNG ou JPEG"),
+                _ => bail!("Joins une seule image de référence"),
+            }
+        } else {
+            attachments
+                .filter_map(|id| self.store.artifact(id).ok().map(|p| p.0))
+                .collect()
+        };
         self.store.append(
             session,
             &Message {
@@ -721,13 +754,46 @@ impl App {
                 .and_then(|n| u32::try_from(n).ok())
                 .unwrap_or_else(|| (Uuid::new_v4().as_u128() & 0x7fff_ffff) as u32);
             let start = std::time::Instant::now();
-            job.status("3d", "Shap-E · Génération du maillage");
-            let mesh = self
-                .engines
-                .mesh(&settings, &request, seed, &job.cancel, |status| {
-                    job.status("3d", status);
-                })
-                .await?;
+            let status = |status: &str| job.status("3d", status);
+            let mesh = match profile {
+                "shape" => {
+                    status("Shap-E · Génération du maillage");
+                    self.engines
+                        .mesh(&settings, &request, seed, &job.cancel, status)
+                        .await?
+                }
+                "trellis" => {
+                    self.engines.require_trellis(&settings)?;
+                    let photo = match photo {
+                        Some(bytes) => bytes,
+                        None => {
+                            let model = self.engines.reference_model(&settings)
+                                .context("Installe Z-Image Turbo dans Réglages → Modèles locaux, ou joins une image PNG ou JPEG")?;
+                            status("Création de l’image de référence");
+                            let description = format!(
+                                "{request}\nSingle isolated object, three-quarter product view, whole object framed with margin, seamless neutral background, even lighting, no other objects, no text."
+                            );
+                            let size = if model == "image" { 512 } else { 768 };
+                            self.engines
+                                .image(
+                                    &settings,
+                                    model,
+                                    &description,
+                                    i64::from(seed),
+                                    size,
+                                    size,
+                                    &job.cancel,
+                                )
+                                .await?
+                                .0
+                        }
+                    };
+                    self.engines
+                        .mesh_photo(&settings, &photo, seed, &job.cancel, status)
+                        .await?
+                }
+                _ => bail!("Modèle 3D inconnu"),
+            };
             job.file(self.store.add_artifact(
                 &format!("sillune-{seed}.glb"),
                 "model/gltf-binary",
@@ -751,9 +817,18 @@ impl App {
                 web: data["web"] == true,
                 desktop,
             };
-            if desktop
+            let explicit_web = matches!(mode, Mode::Chat | Mode::Agent | Mode::Bot)
+                && (context.web || tools::explicit_search(&request));
+            let desktop_write = desktop
+                && tools::requested_action(mode, &request)
+                && tools::is_goal_tool(Mode::Agent, &request, "write_file");
+            if desktop_write && mode == Mode::Chat {
+                job.modify(|v| {
+                    v.text = "Passe en mode Agent pour créer ce fichier sur le Bureau.".into()
+                });
+            } else if desktop
                 && !context.web
-                && !tools::explicit_search(&request)
+                && !explicit_web
                 && let Some(name) = tools::empty_text_request(&request)
             {
                 let response = match mode {
@@ -773,39 +848,47 @@ impl App {
                     _ => "Ce mode est réservé à la création d’extensions ou de thèmes.".to_owned(),
                 };
                 job.modify(|v| v.text = response);
-            } else {
-                let provider = match Provider::resolve(&settings, effort).await {
-                    Ok(p) => p,
-                    Err(error) if local_chat && voice.is_some() => {
-                        let endpoint = voice.as_ref().unwrap();
-                        Provider::with_key(
-                            &Settings {
-                                provider: "compatible".into(),
-                                model: "sillune-voice".into(),
-                                url: endpoint.base.clone(),
-                                ..settings.clone()
-                            },
-                            endpoint.key.clone(),
-                        )
-                        .map_err(|_| error)?
-                    }
-                    Err(e) => return Err(e),
-                };
-                if let Some(level) = provider.effort() {
-                    job.event(format!("Raisonnement transmis au modèle · {level}"));
-                } else if effort.is_some() {
-                    job.event("Ce modèle utilise son effort de raisonnement par défaut.".into());
-                }
-                self.conversation(
+            } else if explicit_web && let Some((city, day)) = weather::location(&request) {
+                self.approval(
                     &context,
-                    &provider,
-                    &request,
-                    data["full_context"].as_bool().unwrap_or(false),
+                    Effect::Read,
+                    "web_search",
+                    format!("Prévisions Open-Meteo · {city}"),
                 )
                 .await?;
-                if settings.memory && !job.cancel.is_cancelled() {
-                    self.review(&context, &provider, &request).await;
+                job.status("working", "Prévisions météo");
+                let forecast = tokio::select! {
+                    result=weather::forecast(city, day)=>result,
+                    _=job.cancel.cancelled()=>bail!("Prévisions interrompues"),
+                };
+                match forecast {
+                    Ok(forecast) => {
+                        job.event(format!("Prévisions vérifiées · {city}"));
+                        job.modify(|v| v.text = forecast);
+                    }
+                    Err(error) => {
+                        job.event(format!("Open-Meteo · {error}"));
+                        self.answer(
+                            &context,
+                            &request,
+                            effort,
+                            false,
+                            voice.as_ref(),
+                            local_chat,
+                        )
+                        .await?;
+                    }
                 }
+            } else {
+                self.answer(
+                    &context,
+                    &request,
+                    effort,
+                    data["full_context"] == true,
+                    voice.as_ref(),
+                    local_chat,
+                )
+                .await?;
             }
             if voice_on {
                 let text = job.view.lock().unwrap().text.clone();
@@ -839,6 +922,96 @@ impl App {
                 files: view.files,
             },
         )?;
+        Ok(())
+    }
+
+    async fn answer(
+        &self,
+        turn: &Turn<'_>,
+        request: &str,
+        effort: Option<u8>,
+        full: bool,
+        voice: Option<&VoiceEndpoint>,
+        local_chat: bool,
+    ) -> Result<()> {
+        let web = matches!(turn.mode, Mode::Chat | Mode::Agent | Mode::Bot)
+            && (turn.web || tools::explicit_search(request));
+        let sources = if web {
+            let query = json!({"query":request.trim_start_matches("/web").trim()});
+            let source = tokio::select! {
+                result=self.execute(turn,"web_search",&query)=>result,
+                _=turn.job.cancel.cancelled()=>bail!("Recherche interrompue"),
+            }
+            .map_err(|error| anyhow::anyhow!("La recherche web a échoué · {error:#}"))?;
+            turn.job.event(format!(
+                "Recherche web exécutée · {}",
+                clipped(&source, 520)
+            ));
+            Some(source)
+        } else {
+            None
+        };
+
+        let completion = async {
+            let provider = match Provider::resolve(turn.settings, effort).await {
+                Ok(provider) => provider,
+                Err(error) if local_chat && voice.is_some() => {
+                    let endpoint = voice.unwrap();
+                    Provider::with_key(
+                        &Settings {
+                            provider: "compatible".into(),
+                            model: "sillune-voice".into(),
+                            url: endpoint.base.clone(),
+                            ..turn.settings.clone()
+                        },
+                        endpoint.key.clone(),
+                    )
+                    .map_err(|_| error)?
+                }
+                Err(error) => return Err(error),
+            };
+            if let Some(level) = provider.effort() {
+                turn.job
+                    .event(format!("Raisonnement transmis au modèle · {level}"));
+            } else if effort.is_some() {
+                turn.job
+                    .event("Ce modèle utilise son effort de raisonnement par défaut.".into());
+            }
+            self.conversation(turn, &provider, request, sources.as_deref(), full)
+                .await?;
+            if turn.settings.memory && !turn.job.cancel.is_cancelled() {
+                self.review(turn, &provider, request).await;
+            }
+            Ok::<_, anyhow::Error>(())
+        }
+        .await;
+
+        if let Err(error) = completion {
+            if turn.job.cancel.is_cancelled() {
+                return Err(error);
+            }
+            let unauthorized = provider::auth_failed(&error);
+            let message = if unauthorized {
+                turn.job.modify(|view| view.credentials = true);
+                format!(
+                    "{} a refusé la clé API (HTTP 401). Vérifie la clé de ce fournisseur dans Réglages → Modèles.",
+                    provider::label(&turn.settings.provider)
+                )
+            } else {
+                format!("{error:#}")
+            };
+            if let Some(source) = sources {
+                turn.job.modify(|view| {
+                    view.error = message;
+                    view.text = format!(
+                        "**Sources récupérées par Sillune**\n\n{}",
+                        tools::search_markdown(&source)
+                    );
+                });
+            } else {
+                bail!("{message}");
+            }
+        }
         Ok(())
     }
 
@@ -893,6 +1066,7 @@ impl App {
         turn: &Turn<'_>,
         provider: &Provider,
         request: &str,
+        sources: Option<&str>,
         full: bool,
     ) -> Result<()> {
         let mut prompt = SYSTEM.to_owned();
@@ -958,7 +1132,7 @@ impl App {
             toolset.push(tools::skill_tool());
         }
         let local = tools::requested_action(mode, request);
-        let web = turn.web || tools::explicit_search(request);
+        let web = sources.is_some();
         if local && !web && !request.contains("https://") && !request.contains("http://") {
             toolset.retain(|tool| {
                 !matches!(
@@ -972,17 +1146,8 @@ impl App {
             prompt.push_str("\nL’utilisateur a demandé le Bureau. Pour y créer un nouveau fichier, passe location = desktop et le nom seul à write_file.");
         }
         let mut messages = self.context(turn, provider, full).await?;
-        if !matches!(mode, Mode::Plugin | Mode::Themes) && web {
-            let query = json!({"query":request.trim_start_matches("/web").trim()});
-            let source = tokio::select! {
-                result=self.execute(turn,"web_search",&query)=>result,
-                _=turn.job.cancel.cancelled()=>bail!("Recherche interrompue"),
-            }
-            .map_err(|error| anyhow::anyhow!("La recherche web a échoué · {error:#}"))?;
-            turn.job.event(format!(
-                "Recherche web exécutée · {}",
-                clipped(&source, 520)
-            ));
+        if let Some(source) = sources {
+            toolset.retain(|tool| tool["function"]["name"] != "web_search");
             if let Some(message) = messages.last_mut()
                 && message["role"] == "user"
             {
@@ -996,6 +1161,7 @@ impl App {
         let mut last_error = String::new();
         let mut action_done = false;
         let mut tool_denied = false;
+        let mut verified = Vec::new();
         for _ in 0..16 {
             turn.job.status("thinking", "Réponse en cours");
             let completion = provider
@@ -1014,6 +1180,12 @@ impl App {
                 .await;
             let complete = match completion {
                 Ok(complete) => complete,
+                Err(error) if !verified.is_empty() && !turn.job.cancel.is_cancelled() => {
+                    turn.job
+                        .event(format!("Réponse du modèle interrompue · {error:#}"));
+                    turn.job.modify(|view| view.text = verified.join("\n\n"));
+                    return Ok(());
+                }
                 Err(error)
                     if local
                         && !action_done
@@ -1041,7 +1213,13 @@ impl App {
                         self.recover_tool(turn, provider, request, &toolset, &last_error)
                             .await?;
                     } else if action_done {
-                        turn.job.modify(|v| v.text = complete.text);
+                        turn.job.modify(|v| {
+                            v.text = if complete.text.trim().is_empty() {
+                                verified.join("\n\n")
+                            } else {
+                                complete.text
+                            }
+                        });
                     } else if !last_error.is_empty() {
                         turn.job.modify(|v| v.text = last_error);
                     } else {
@@ -1081,6 +1259,9 @@ impl App {
                 if ok && tools::is_goal_tool(mode, request, &call.name) {
                     action_done = true;
                 }
+                if ok && !tools::is_read_tool(&call.name) && !verified.contains(&output) {
+                    verified.push(output.clone());
+                }
                 if !ok {
                     last_error = output.clone();
                 }
@@ -1102,6 +1283,12 @@ impl App {
                     v.text.push_str("\n\n");
                 }
             });
+        }
+        if !verified.is_empty() {
+            turn.job.modify(|view| view.text = verified.join("\n\n"));
+            turn.job
+                .event("Limite d’appels d’outils atteinte pour ce tour.".into());
+            return Ok(());
         }
         bail!(
             "La chaîne d’outils atteint sa limite pour ce tour. Tu peux continuer dans la conversation."
@@ -1164,13 +1351,21 @@ impl App {
         turn.job.modify(|v| v.usage.add(&recovery.usage));
         let answer = recovery.text.trim();
         let answer = answer
+            .strip_prefix("<tool_call>")
+            .and_then(|value| value.strip_suffix("</tool_call>"))
+            .unwrap_or(answer)
+            .trim();
+        let answer = answer
             .strip_prefix("```json")
             .or_else(|| answer.strip_prefix("```"))
             .and_then(|v| v.strip_suffix("```"))
             .unwrap_or(answer)
             .trim();
         let command = serde_json::from_str::<Value>(answer).unwrap_or_default();
-        let Some(name) = command["tool"].as_str() else {
+        let Some(name) = command["tool"]
+            .as_str()
+            .or_else(|| command["name"].as_str())
+        else {
             let response = command["question"]
                 .as_str()
                 .filter(|s| s.ends_with('?'))

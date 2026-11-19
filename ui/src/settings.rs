@@ -181,8 +181,9 @@ fn Models(ui: Ui, draft: RwSignal<Value>) -> impl IntoView {
             <Pack ui=ui id="image" title="Image · SDXS-512-DreamShaper"/>
             <Pack ui=ui id="quality" title="Image · FLUX.2 klein 4B quantifié"/>
             <Pack ui=ui id="zimage" title="Image · Z-Image Turbo Q4"/>
-            <Pack ui=ui id="shape" title="3D · Shap-E"/>
-            <p class="subtle">"Sillune prépare Python et les dépendances de Shap-E lors de l’installation."</p>
+            <Pack ui=ui id="trellis" title="3D · TRELLIS.2 4B Q8 Vulkan"/>
+            <p class="subtle">"Convertit une image PNG ou JPEG en GLB texturé. Pour partir d’un texte, installe aussi un modèle d’image, par exemple Z-Image Turbo."</p>
+            <Pack ui=ui id="shape" title="3D · Shap-E (historique)"/>
             <Pack ui=ui id="voice" title="Bot · LFM3-Audio-2B français"/>
             <details class="advanced">
                 <summary>"Dossier des moteurs et modèles"</summary>

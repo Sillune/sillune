@@ -20,7 +20,7 @@ pub fn ModelPicker(ui: Ui) -> impl IntoView {
     let reasoning = RwSignal::new(Value::Null);
     let pending_reasoning = RwSignal::new(false);
     let reasoning_version = RwSignal::new(0u64);
-    let draft_level = RwSignal::new(None::<u64>);
+    let drag_value = RwSignal::new(None::<f64>);
     let fetch = move |id: String, refresh: bool| {
         let ticket = version.get_untracked().wrapping_add(1);
         version.set(ticket);
@@ -56,7 +56,7 @@ pub fn ModelPicker(ui: Ui) -> impl IntoView {
         }
         let provider = selected_provider.get();
         let model = selected_model.get();
-        draft_level.set(None);
+        drag_value.set(None);
         let id = reasoning_version.get_untracked().wrapping_add(1);
         reasoning_version.set(id);
         pending_reasoning.set(true);
@@ -90,7 +90,17 @@ pub fn ModelPicker(ui: Ui) -> impl IntoView {
         });
     };
     let saved_level = move || ui.selection.with(|s| s["effort"].as_u64());
-    let current_level = move || draft_level.get().or_else(saved_level);
+    let position = move || {
+        drag_value
+            .get()
+            .unwrap_or_else(|| saved_level().unwrap_or(0) as f64)
+    };
+    let current_level = move || {
+        drag_value
+            .get()
+            .map(|value| value.round() as u64)
+            .or_else(saved_level)
+    };
     let level = move || {
         current_level()
             .and_then(|n| LEVELS.get(n as usize))
@@ -99,14 +109,14 @@ pub fn ModelPicker(ui: Ui) -> impl IntoView {
     let save_effort = move |effort: Option<u64>| {
         let model = ui.selected("model");
         if model.is_empty() {
+            drag_value.set(None);
             ui.tell("Sélectionne d’abord un modèle.");
             return;
         }
-        draft_level.set(None);
-        if saved_level() == effort {
-            return;
+        if saved_level() != effort {
+            ui.choose(json!({"provider":ui.selected("provider"),"model":model,"effort":effort}));
         }
-        ui.choose(json!({"provider":ui.selected("provider"),"model":model,"effort":effort}));
+        drag_value.set(None);
     };
     view! {
         <div class="composer-picker" on:keydown=move |event:web_sys::KeyboardEvent| {
@@ -122,27 +132,26 @@ pub fn ModelPicker(ui: Ui) -> impl IntoView {
                     let id = ui.selected("model");
                     if id.is_empty() { "Modèle".into() } else { id }
                 }}</span>
-                <span aria-hidden="true">"⌄"</span>
+                <span class="chevron" aria-hidden="true"></span>
             </button>
             <button class="picker-button effort-button" aria-label="Effort de raisonnement" aria-expanded=move || (ui.picker.get()=="effort").to_string()
                 on:click=move |_|toggle("effort")>
-                <span class="picker-icon" aria-hidden="true">"ϟ"</span>
                 <span>{move || saved_level().and_then(|n|LEVELS.get(n as usize)).copied().unwrap_or("Effort")}</span>
-                <span aria-hidden="true">"⌄"</span>
+                <span class="chevron" aria-hidden="true"></span>
             </button>
             <Show when=move || ui.picker.get()=="models">
                 <section class="picker-popover" aria-label="Catalogue de modèles">
                     <div class="picker-heading">
                         <label>
                             "Fournisseur"
-                            <select aria-label="Fournisseur de modèles" prop:value=move ||provider.get() on:change=move |ev|{
+                            <span class="select-chevron"><select aria-label="Fournisseur de modèles" prop:value=move ||provider.get() on:change=move |ev|{
                                 let id=event_target_value(&ev);
                                 provider.set(id.clone());
                                 search.set(String::new());
                                 fetch(id,false);
                             }>
                                 {PROVIDERS.iter().map(|(id,name,_)|view!{<option value=*id>{*name}</option>}).collect_view()}
-                            </select>
+                            </select><span class="chevron" aria-hidden="true"></span></span>
                         </label>
                         <button class="iconbutton" aria-label="Actualiser les modèles" title="Actualiser les modèles"
                             disabled=move || loading.get() on:click=move |_|fetch(provider.get_untracked(),true)>"↻"</button>
@@ -190,27 +199,36 @@ pub fn ModelPicker(ui: Ui) -> impl IntoView {
                 <section class="picker-popover effort-popover" aria-label="Réglage du raisonnement"
                     class:ultra=move ||current_level()==Some(5)>
                     <div class="effort-heading">
-                        <span class="effort-glyph" aria-hidden="true">"ϟ"</span>
                         <div><strong>{move ||level().unwrap_or("Par défaut")}</strong><small>{move ||ui.selected("model")}</small></div>
                         <button class="iconbutton" aria-label="Rétablir l’effort par défaut" title="Rétablir l’effort par défaut"
                             on:click=move |_|save_effort(None)>"↺"</button>
                     </div>
-                    <div class="effort-steps" style=move ||format!("--progress:{}%",current_level().unwrap_or(0)*20)>
+                    <div class="effort-steps" style=move ||format!("--progress:{}",position()/5.0)>
                         <div class="effort-track" aria-hidden="true">{(0..6).map(|_|view!{<i></i>}).collect_view()}</div>
-                        <input type="range" min="0" max="5" step="1" aria-label="Niveau de raisonnement"
+                        <input type="range" min="0" max="5" step="any" aria-label="Niveau de raisonnement"
                             aria-valuetext=move ||level().unwrap_or("Par défaut")
-                            prop:value=move ||current_level().unwrap_or(0).to_string()
-                            on:input=move |ev|draft_level.set(event_target_value(&ev).parse::<u64>().ok())
+                            prop:value=move ||position().to_string()
+                            on:input=move |ev|drag_value.set(event_target_value(&ev).parse::<f64>().ok())
                             on:click=move |ev| {
-                                if saved_level().is_none()
-                                    && let Ok(index)=event_target_value(&ev).parse::<u64>() {
-                                    save_effort(Some(index));
+                                if saved_level().is_none() && let Ok(value)=event_target_value(&ev).parse::<f64>() {
+                                    save_effort(Some(value.round() as u64));
                                 }
                             }
                             on:change=move |ev| {
-                                if let Ok(index)=event_target_value(&ev).parse::<u64>() {
-                                    save_effort(Some(index));
+                                if let Ok(value)=event_target_value(&ev).parse::<f64>() {
+                                    save_effort(Some(value.round() as u64));
                                 }
+                            }
+                            on:keydown=move |ev:web_sys::KeyboardEvent| {
+                                let current=position().round() as u64;
+                                let next=match ev.key().as_str() {
+                                    "ArrowLeft"|"ArrowDown"=>current.saturating_sub(1),
+                                    "ArrowRight"|"ArrowUp"=>(current+1).min(5),
+                                    "Home"=>0, "End"=>5,
+                                    _=>return,
+                                };
+                                ev.prevent_default();
+                                save_effort(Some(next));
                             }/>
                     </div>
                     <p class="picker-status">{move || {

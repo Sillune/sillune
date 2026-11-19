@@ -114,6 +114,7 @@ pub struct Ui {
     pub size: RwSignal<String>,
     pub seed: RwSignal<String>,
     pub image_profile: RwSignal<String>,
+    pub mesh_profile: RwSignal<String>,
     pub selection: RwSignal<Value>,
     pub web: RwSignal<bool>,
     pub voice_ready: RwSignal<bool>,
@@ -143,6 +144,7 @@ impl Ui {
             size: RwSignal::new("square".into()),
             seed: RwSignal::new(String::new()),
             image_profile: RwSignal::new("image".into()),
+            mesh_profile: RwSignal::new("trellis".into()),
             selection: RwSignal::new(Value::Null),
             web: RwSignal::new(false),
             voice_ready: RwSignal::new(false),
@@ -314,13 +316,16 @@ impl Ui {
             return;
         }
         let text = self.composer.get_untracked().trim().to_owned();
-        if text.is_empty() && pcm.is_none() {
+        let mode = self.mode.get_untracked();
+        let mesh = self.mesh_profile.get_untracked();
+        let files = self.attachments.get_untracked();
+        let photo = mode == "3d" && mesh == "trellis" && !files.is_empty();
+        if text.is_empty() && pcm.is_none() && !photo {
             return;
         }
-        let mode = self.mode.get_untracked();
         let pack = match mode.as_str() {
             "image" => Some(self.image_profile.get_untracked()),
-            "3d" => Some("shape".into()),
+            "3d" => Some(mesh.clone()),
             "bot" if pcm.is_some() => Some("voice".into()),
             _ => None,
         };
@@ -340,7 +345,9 @@ impl Ui {
         spawn_local(async move {
             let mut session = self.session.get_untracked();
             if session.is_empty() {
-                let title = if text.is_empty() {
+                let title = if photo && text.is_empty() {
+                    field(&files[0], "name")
+                } else if text.is_empty() {
                     "Conversation vocale".into()
                 } else {
                     text.chars().take(58).collect::<String>()
@@ -364,15 +371,10 @@ impl Ui {
                 "large" if self.image_profile.get_untracked() != "image" => (1024, 1024),
                 _ => (512, 512),
             };
-            let attachments = self
-                .attachments
-                .get_untracked()
-                .iter()
-                .map(|f| field(f, "id"))
-                .collect::<Vec<_>>();
+            let attachments = files.iter().map(|f| field(f, "id")).collect::<Vec<_>>();
             let row = json!({"session":session,"text":text,"pcm":pcm,"width":dims.0,"height":dims.1,
                 "seed":self.seed.get_untracked().parse::<i64>().ok(),"speak":!self.quiet.get_untracked(),"attachments":attachments,
-                "image_profile":self.image_profile.get_untracked(),"selection":self.selection.get_untracked(),"web":self.web.get_untracked()});
+                "image_profile":self.image_profile.get_untracked(),"mesh_profile":mesh,"selection":self.selection.get_untracked(),"web":self.web.get_untracked()});
             match invoke("start", row).await {
                 Ok(job) => {
                     self.job.set(job);
@@ -380,13 +382,14 @@ impl Ui {
                     self.attachments.set(Vec::new());
                     self.web.set(false);
                     self.picker.set("");
-                    let user = if text.is_empty() {
+                    let user = if text.is_empty() && !photo {
                         "Message vocal".into()
                     } else {
                         text
                     };
-                    self.messages
-                        .update(|messages| messages.push(json!({"role":"user","text":user})));
+                    self.messages.update(|messages| {
+                        messages.push(json!({"role":"user","text":user,"files":files}))
+                    });
                     scroll_thread();
                 }
                 Err(e) => self.tell(e),
@@ -428,10 +431,7 @@ impl Ui {
                         if done {
                             self.load_chat(&session, false).await;
                             self.refresh().await;
-                            let error = field(&job, "error");
-                            if !error.is_empty() {
-                                self.tell(error);
-                            } else if let Some(error) = list(&job, "events")
+                            if let Some(error) = list(&job, "events")
                                 .iter()
                                 .rev()
                                 .filter_map(Value::as_str)
@@ -516,8 +516,16 @@ impl Ui {
     }
 
     pub fn attach(self) {
+        let photo = self.mode.get_untracked() == "3d";
         spawn_local(async move {
             match native("import_file", json!({})).await {
+                Ok(file) if photo && !file.is_null() => {
+                    if matches!(file["media"].as_str(), Some("image/png" | "image/jpeg")) {
+                        self.attachments.set(vec![file]);
+                    } else {
+                        self.tell("Choisis une image PNG ou JPEG.");
+                    }
+                }
                 Ok(file) if !file.is_null() => self.attachments.update(|items| {
                     if items.len() < 6 {
                         items.push(file)

@@ -9,4 +9,6 @@ pub mod skills;
 pub mod storage;
 mod themes;
 pub mod tools;
+mod trellis;
 pub mod vault;
+mod weather;

@@ -801,17 +801,46 @@ fn set_usage(usage: &mut Usage, value: &Value) {
     }
 }
 
+#[derive(Debug)]
+struct HttpFailure(reqwest::StatusCode);
+
+impl std::error::Error for HttpFailure {}
+
+impl std::fmt::Display for HttpFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let message = match self.0.as_u16() {
+            401 | 403 => "identifiants ou périmètre à vérifier",
+            402 => "crédits insuffisants",
+            404 => "adresse ou modèle introuvable",
+            429 => "limite du fournisseur atteinte",
+            _ => "requête refusée",
+        };
+        write!(f, "HTTP {} · {message}", self.0)
+    }
+}
+
+pub fn auth_failed(error: &anyhow::Error) -> bool {
+    error
+        .downcast_ref::<HttpFailure>()
+        .is_some_and(|e| e.0 == reqwest::StatusCode::UNAUTHORIZED)
+}
+
+pub fn label(account: &str) -> &'static str {
+    match account {
+        "openrouter" => "OpenRouter",
+        "openai" => "OpenAI",
+        "anthropic" => "Anthropic",
+        "mistral" => "Mistral",
+        "nous" => "Nous Portal",
+        "opencode" => "OpenCode",
+        _ => "L’API compatible",
+    }
+}
+
 pub async fn checked(response: Response) -> Result<Response> {
     if response.status().is_success() {
-        return Ok(response);
+        Ok(response)
+    } else {
+        Err(HttpFailure(response.status()).into())
     }
-    let status = response.status();
-    let message = match status.as_u16() {
-        401 | 403 => "identifiants ou périmètre à vérifier",
-        402 => "crédits insuffisants",
-        404 => "adresse ou modèle introuvable",
-        429 => "limite du fournisseur atteinte",
-        _ => "requête refusée",
-    };
-    bail!("HTTP {status} · {message}");
 }
